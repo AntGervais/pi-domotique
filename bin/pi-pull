@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Rapatrie la config du Pi vers le miroir local. Écrase le local. N'écrit JAMAIS sur le Pi.
+set -uo pipefail
+source "$(dirname "$0")/_manifest.sh"
+pi_check
+cd "$PI_ROOT"
+
+n_new=0 n_chg=0 n_same=0 n_err=0
+for e in "${MAP[@]}"; do
+  l=$(m_local "$e"); r=$(m_remote "$e")
+  mkdir -p "$(dirname "$l")"
+  tmp=$(mktemp)
+  if ! ssh "$PI_HOST" "cat '$r'" > "$tmp" 2>/dev/null; then
+    echo "  ✗ $l — illisible sur le Pi ($r)"; rm -f "$tmp"; ((n_err++)); continue
+  fi
+  if [[ ! -f "$l" ]]; then
+    mv "$tmp" "$l"; echo "  + $l"; ((n_new++))
+  elif cmp -s "$tmp" "$l"; then
+    rm -f "$tmp"; ((n_same++))
+  else
+    mv "$tmp" "$l"; echo "  ~ $l"; ((n_chg++))
+  fi
+done
+echo "pull : $n_new nouveau(x), $n_chg modifié(s), $n_same inchangé(s), $n_err erreur(s)"
+[[ $n_err -eq 0 ]]

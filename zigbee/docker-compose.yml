@@ -1,0 +1,43 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    ports:
+      - "1883:1883"
+
+  zigbee2mqtt:
+    image: koenkk/zigbee2mqtt:latest
+    container_name: zigbee2mqtt
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    volumes:
+      - ./zigbee2mqtt/data:/app/data
+      - /run/udev:/run/udev:ro
+    devices:
+      - /dev/serial/by-id/usb-Itead_Sonoff_Zigbee_3.0_USB_Dongle_Plus_V2_9812032257d7f01185cbffe6daa565c4-if00-port0:/dev/ttyUSB0
+    ports:
+      - "8080:8080"
+    environment:
+      - TZ=Europe/Paris
+
+  nodered:
+    image: nodered/node-red:latest
+    container_name: nodered
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    volumes:
+      - ./nodered/data:/data
+    ports:
+      - "1880:1880"
+    environment:
+      - TZ=Europe/Paris
+      - HUE_BRIDGE=${HUE_BRIDGE}
+      - HUE_KEY=${HUE_KEY}
+      - NTFY_URL=${NTFY_URL}

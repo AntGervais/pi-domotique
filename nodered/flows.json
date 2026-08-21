@@ -1,0 +1,1020 @@
+[
+    {
+        "id": "f_thermo",
+        "type": "tab",
+        "label": "Thermomètres",
+        "disabled": false,
+        "info": ""
+    },
+    {
+        "id": "broker_mosq",
+        "type": "mqtt-broker",
+        "name": "mosquitto",
+        "broker": "mosquitto",
+        "port": "1883",
+        "clientid": "nodered",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": "4",
+        "keepalive": "60",
+        "cleansession": true,
+        "birthQos": "0",
+        "willQos": "0"
+    },
+    {
+        "id": "uib",
+        "type": "ui-base",
+        "name": "Maison",
+        "path": "/dashboard"
+    },
+    {
+        "id": "uith",
+        "type": "ui-theme",
+        "name": "Thème sombre",
+        "colors": {
+            "surface": "#1f2630",
+            "primary": "#ff7043",
+            "bgPage": "#111820",
+            "groupBg": "#1f2630",
+            "groupOutline": "#2c3742"
+        },
+        "sizes": {
+            "pagePadding": "12px",
+            "groupGap": "12px",
+            "groupBorderRadius": "12px",
+            "widgetGap": "12px",
+            "density": "default"
+        }
+    },
+    {
+        "id": "uipg",
+        "type": "ui-page",
+        "name": "Maison",
+        "ui": "uib",
+        "path": "/home",
+        "icon": "home",
+        "layout": "grid",
+        "theme": "uith",
+        "order": 1,
+        "className": "",
+        "visible": true,
+        "disabled": false,
+        "breakpoints": [
+            {
+                "name": "Default",
+                "px": 0,
+                "cols": 6
+            },
+            {
+                "name": "Large",
+                "px": 900,
+                "cols": 12
+            }
+        ]
+    },
+    {
+        "id": "mqtt_chambre",
+        "type": "mqtt in",
+        "z": "f_thermo",
+        "name": "Tous les capteurs",
+        "topic": "zigbee2mqtt/+",
+        "qos": "0",
+        "datatype": "json",
+        "broker": "broker_mosq",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 150,
+        "y": 160,
+        "wires": [
+            [
+                "fn_process"
+            ]
+        ]
+    },
+    {
+        "id": "fn_process",
+        "type": "function",
+        "z": "f_thermo",
+        "name": "stocke + route",
+        "func": "var p = msg.payload || {};\nif (msg.topic === 'zigbee2mqtt/Chambre Axel') {\n    global.set('temp_chambre', p.temperature);\n    global.set('hum_chambre', p.humidity);\n}\n\n// Nom du capteur deduit du topic MQTT : l'arrivee d'un 2e capteur ne\n// demandera aucune modification ici.\nvar capteur = (msg.topic || '').split('/').pop() || 'inconnu';\n\n// Le wildcard 'zigbee2mqtt/+' capte aussi les topics techniques du bridge.\nif (capteur === 'bridge' || capteur === 'inconnu') return null;\nvar aTemp = typeof p.temperature === 'number';\n\n// Un format par consommateur, pour qu'un changement d'un cote n'en casse pas un autre.\nreturn [\n    { payload: p, capteur: capteur },                                   // 1. carte (routee par capteur)\n    aTemp ? { payload: p.temperature } : null,                          // 2. seuil 30 C (nombre)\n    aTemp ? { payload: p, capteur: capteur } : null,                    // 3. SQLite\n    aTemp ? { payload: { ts: Date.parse(p.last_seen) || Date.now(),     // 4. graphe (point x/y/serie)\n                         temp: p.temperature, capteur: capteur } } : null\n];",
+        "outputs": 4,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 360,
+        "y": 160,
+        "wires": [
+            [
+                "sw_cards"
+            ],
+            [
+                "fn_check30"
+            ],
+            [
+                "fn_db_write",
+                "fn_fenetre"
+            ],
+            [
+                "ui_chart_hist"
+            ]
+        ]
+    },
+    {
+        "id": "ui_chart_hist",
+        "type": "ui-chart",
+        "z": "f_thermo",
+        "group": "grp_hist",
+        "name": "Historique 24 h",
+        "order": 1,
+        "width": "12",
+        "height": "7",
+        "label": "",
+        "chartType": "line",
+        "category": "capteur",
+        "categoryType": "property",
+        "xAxisLabel": "",
+        "xAxisProperty": "ts",
+        "xAxisPropertyType": "property",
+        "xAxisType": "time",
+        "xAxisFormat": "",
+        "xAxisFormatType": "auto",
+        "yAxisLabel": "",
+        "yAxisProperty": "temp",
+        "yAxisPropertyType": "property",
+        "xmin": "",
+        "xmax": "",
+        "ymin": "",
+        "ymax": "",
+        "bins": 10,
+        "action": "append",
+        "stackSeries": false,
+        "pointShape": "circle",
+        "pointRadius": 2,
+        "showLegend": true,
+        "removeOlder": 24,
+        "removeOlderUnit": "3600",
+        "removeOlderPoints": "",
+        "colors": [
+            "#ff7043",
+            "#4dd0e1",
+            "#ba68c8",
+            "#81c784",
+            "#ffd54f",
+            "#f06292",
+            "#7986cb",
+            "#a1887f"
+        ],
+        "textColor": [
+            "#999999"
+        ],
+        "textColorDefault": true,
+        "gridColor": [
+            "#333333"
+        ],
+        "gridColorDefault": true,
+        "interpolation": "linear",
+        "className": "",
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "fn_check30",
+        "type": "function",
+        "z": "f_thermo",
+        "name": "seuil > 30°C",
+        "func": "var temp = msg.payload;\nif (typeof temp !== 'number') return null;\nvar was = flow.get('over30') || false;\nif (temp > 30 && !was) {\n    flow.set('over30', true);\n    msg.payload = 'Chambre Axel: ' + temp + ' C (seuil 30 C depasse)';\n    msg.headers = { 'Title': 'Alerte temperature', 'Priority': 'high', 'Tags': 'warning,thermometer' };\n    return msg;\n} else if (temp <= 30 && was) {\n    flow.set('over30', false);\n}\nreturn null;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 580,
+        "y": 300,
+        "wires": [
+            [
+                "http_ntfy"
+            ]
+        ]
+    },
+    {
+        "id": "http_ntfy",
+        "type": "http request",
+        "z": "f_thermo",
+        "name": "ntfy push",
+        "method": "POST",
+        "ret": "txt",
+        "paytoqs": "ignore",
+        "url": "${NTFY_URL}",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 780,
+        "y": 300,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "http_in_temp",
+        "type": "http in",
+        "z": "f_thermo",
+        "name": "GET /temp-chambre-axel",
+        "url": "/temp-chambre-axel",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 180,
+        "y": 400,
+        "wires": [
+            [
+                "fn_reply"
+            ]
+        ]
+    },
+    {
+        "id": "fn_reply",
+        "type": "function",
+        "z": "f_thermo",
+        "name": "réponse parlée",
+        "func": "var t = global.get('temp_chambre');\nvar h = global.get('hum_chambre');\nif (t === undefined || t === null) {\n    msg.payload = \"Je n'ai pas encore de mesure pour la chambre d'Axel.\";\n} else {\n    msg.payload = 'Il fait ' + t + ' degrés dans la chambre d\\'Axel';\n    if (h !== undefined && h !== null) { msg.payload += ', avec ' + Math.round(h) + ' pour cent d\\'humidité.'; }\n    else { msg.payload += '.'; }\n}\nmsg.headers = { 'Content-Type': 'text/plain; charset=utf-8' };\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 430,
+        "y": 400,
+        "wires": [
+            [
+                "http_resp"
+            ]
+        ]
+    },
+    {
+        "id": "http_resp",
+        "type": "http response",
+        "z": "f_thermo",
+        "name": "",
+        "statusCode": "200",
+        "headers": {},
+        "x": 630,
+        "y": 400,
+        "wires": []
+    },
+    {
+        "id": "f_hue",
+        "type": "tab",
+        "label": "Hue",
+        "disabled": false,
+        "info": "Pont Philips Hue via l'API CLIP v2 (HTTPS, certificat auto-signé -> tls-config sans vérification).\nClé d'application dans la variable d'env HUE_KEY du conteneur (fichier zigbee/.env), pas dans ce flow.\n\nLECTURE SEULE — un seul endpoint :\n  GET /hue/etat  -> état de toutes les pièces, en français (pour Siri)\n\nLes commandes (on/off/toggle/luminosité/scènes) ont été retirées volontairement.\nPour les remettre : python3 /home/antoine/hue-flow-complet.py sur le Pi.",
+        "env": []
+    },
+    {
+        "id": "tls_hue",
+        "type": "tls-config",
+        "name": "Pont Hue (certificat auto-signé)",
+        "cert": "",
+        "key": "",
+        "ca": "",
+        "certname": "",
+        "keyname": "",
+        "caname": "",
+        "servername": "",
+        "verifyservercert": false,
+        "alpnprotocol": ""
+    },
+    {
+        "id": "inj_hue_inv",
+        "type": "inject",
+        "z": "f_hue",
+        "name": "au démarrage + toutes les 15 min",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "900",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "8",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 220,
+        "y": 80,
+        "wires": [
+            [
+                "fn_hue_inv_req"
+            ]
+        ]
+    },
+    {
+        "id": "fn_hue_inv_req",
+        "type": "function",
+        "z": "f_hue",
+        "name": "requête inventaire",
+        "func": "msg.method = \"GET\";\nmsg.url = \"https://\" + env.get(\"HUE_BRIDGE\") + \"/clip/v2/resource\";\nmsg.headers = { \"hue-application-key\": env.get(\"HUE_KEY\") };\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 480,
+        "y": 80,
+        "wires": [
+            [
+                "req_hue_inv"
+            ]
+        ]
+    },
+    {
+        "id": "req_hue_inv",
+        "type": "http request",
+        "z": "f_hue",
+        "name": "GET /clip/v2/resource",
+        "method": "GET",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "tls_hue",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 700,
+        "y": 80,
+        "wires": [
+            [
+                "fn_hue_inv_store"
+            ]
+        ]
+    },
+    {
+        "id": "fn_hue_inv_store",
+        "type": "function",
+        "z": "f_hue",
+        "name": "stocke global.hue",
+        "func": "const norm = s => (s||\"\").normalize(\"NFD\").replace(/[\\u0300-\\u036f]/g,\"\").toLowerCase().replace(/[^a-z0-9]/g,\"\");\nconst data = ((msg.payload || {}).data) || [];\nconst by = t => data.filter(o => o.type === t);\nconst devices = {}; by(\"device\").forEach(d => { devices[d.id] = d; });\nconst lights = {};  by(\"light\").forEach(l => { lights[l.id] = l; });\nconst rooms = [];\nby(\"room\").concat(by(\"zone\")).forEach(r => {\n    const gl = (r.services || []).find(s => s.rtype === \"grouped_light\");\n    const lids = [];\n    (r.children || []).forEach(c => {\n        const d = devices[c.rid];\n        if (d) (d.services || []).forEach(s => { if (s.rtype === \"light\") lids.push(s.rid); });\n        if (lights[c.rid]) lids.push(c.rid);\n    });\n    const nm = (r.metadata || {}).name || \"?\";\n    rooms.push({ name: nm, norm: norm(nm), id: r.id, gl: gl ? gl.rid : null, lights: lids });\n});\nconst scenes = by(\"scene\").map(s => {\n    const nm = (s.metadata || {}).name || \"?\";\n    return { name: nm, norm: norm(nm), id: s.id, room: s.group.rid };\n});\nglobal.set(\"hue\", { rooms: rooms, scenes: scenes, nbLights: Object.keys(lights).length, ts: Date.now() });\nnode.status({ fill: \"green\", shape: \"dot\", text: rooms.length + \" pièces / \" + scenes.length + \" scènes\" });\nreturn null;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 920,
+        "y": 80,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "in_hue_etat",
+        "type": "http in",
+        "z": "f_hue",
+        "name": "GET /hue/etat",
+        "url": "/hue/etat",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 200,
+        "y": 220,
+        "wires": [
+            [
+                "fn_hue_etat_req"
+            ]
+        ]
+    },
+    {
+        "id": "fn_hue_etat_req",
+        "type": "function",
+        "z": "f_hue",
+        "name": "requête état",
+        "func": "if (!global.get(\"hue\")) {\n    msg.statusCode = 503;\n    msg.headers = { \"Content-Type\": \"text/plain; charset=utf-8\" };\n    msg.payload = \"Inventaire Hue pas encore chargé, réessaie dans quelques secondes.\";\n    return [null, msg];\n}\nmsg.method = \"GET\";\nmsg.headers = { \"hue-application-key\": env.get(\"HUE_KEY\") };\nmsg.url = \"https://\" + env.get(\"HUE_BRIDGE\") + \"/clip/v2/resource/grouped_light\";\nreturn [msg, null];",
+        "outputs": 2,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 450,
+        "y": 220,
+        "wires": [
+            [
+                "req_hue_get"
+            ],
+            [
+                "resp_hue"
+            ]
+        ]
+    },
+    {
+        "id": "req_hue_get",
+        "type": "http request",
+        "z": "f_hue",
+        "name": "GET grouped_light",
+        "method": "GET",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "tls_hue",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 680,
+        "y": 220,
+        "wires": [
+            [
+                "fn_hue_etat_reply"
+            ]
+        ]
+    },
+    {
+        "id": "fn_hue_etat_reply",
+        "type": "function",
+        "z": "f_hue",
+        "name": "phrase en français",
+        "func": "const inv = global.get(\"hue\") || { rooms: [] };\nconst glAll = {};\n(((msg.payload || {}).data) || []).forEach(g => { glAll[g.id] = g; });\nconst pct = g => Math.round(((g.dimming || {}).brightness) || 0);\nconst parts = inv.rooms.map(r => {\n    const g = glAll[r.gl];\n    if (!g) return r.name + \" : état inconnu\";\n    return g.on.on ? r.name + \" allumé à \" + pct(g) + \" pour cent\" : r.name + \" éteint\";\n});\nmsg.statusCode = 200;\nmsg.headers = { \"Content-Type\": \"text/plain; charset=utf-8\" };\nmsg.payload = parts.length ? parts.join(\", \") + \".\" : \"Aucune pièce Hue trouvée.\";\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 900,
+        "y": 220,
+        "wires": [
+            [
+                "resp_hue"
+            ]
+        ]
+    },
+    {
+        "id": "resp_hue",
+        "type": "http response",
+        "z": "f_hue",
+        "name": "réponse HTTP",
+        "statusCode": "",
+        "headers": {},
+        "x": 1120,
+        "y": 220,
+        "wires": []
+    },
+    {
+        "id": "catch_hue",
+        "type": "catch",
+        "z": "f_hue",
+        "name": "erreurs du flow",
+        "scope": [
+            "fn_hue_inv_req",
+            "req_hue_inv",
+            "fn_hue_inv_store",
+            "fn_hue_etat_req",
+            "req_hue_get",
+            "fn_hue_etat_reply"
+        ],
+        "uncaught": false,
+        "x": 450,
+        "y": 340,
+        "wires": [
+            [
+                "fn_hue_err"
+            ]
+        ]
+    },
+    {
+        "id": "fn_hue_err",
+        "type": "function",
+        "z": "f_hue",
+        "name": "message d'erreur",
+        "func": "if (!msg.req) { node.warn(\"Hue (hors requête HTTP) : \" + ((msg.error || {}).message || \"erreur\")); return null; }\nmsg.statusCode = 502;\nmsg.headers = { \"Content-Type\": \"text/plain; charset=utf-8\" };\nmsg.payload = \"Le pont Hue ne répond pas (\" + ((msg.error || {}).message || \"erreur inconnue\") + \").\";\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 680,
+        "y": 340,
+        "wires": [
+            [
+                "resp_hue"
+            ]
+        ]
+    },
+    {
+        "id": "fn_db_write",
+        "type": "function",
+        "z": "f_thermo",
+        "name": "SQLite : enregistre",
+        "func": "const db = context.get('db');\nif (!db) { node.error('base SQLite non ouverte'); return null; }\n\nconst p = msg.payload || {};\nconst capteur = msg.capteur || 'inconnu';\n\n// Sans temperature il n'y a rien a historiser (message d'etat, disponibilite...).\nif (typeof p.temperature !== 'number') return null;\n\n// On horodate avec la date du CAPTEUR (last_seen fourni par Z2M), pas l'heure\n// de reception : sinon chaque reconnexion MQTT rejoue le message retained et\n// fabrique une fausse mesure. Avec last_seen, la cle primaire (ts, capteur)\n// rend l'insertion vraiment idempotente.\nlet ts = Date.parse(p.last_seen);\nif (!Number.isFinite(ts)) {\n    ts = Date.now();                       // repli si last_seen absent\n    node.warn('last_seen absent pour ' + capteur + ', horodatage a la reception');\n}\n\n// Z2M publie plusieurs messages en rafale (un par attribut Zigbee recu), chacun\n// avec un last_seen different a la milliseconde : la cle (ts, capteur) ne les\n// deduplique donc pas. On ignore une mesure identique a la precedente si elle\n// date de moins d'une minute — on ne perd rien, seul un changement compte.\nconst hum = typeof p.humidity === 'number' ? p.humidity : null;\nconst precedente = db.prepare(\n    'SELECT temp, hum FROM mesures WHERE capteur = ? AND ts >= ? ORDER BY ts DESC LIMIT 1'\n).get(capteur, ts - 60000);\nif (precedente && precedente.temp === p.temperature && precedente.hum === hum) {\n    return null;\n}\n\ntry {\n    db.prepare(\n        'INSERT OR REPLACE INTO mesures (ts, capteur, temp, hum, batterie) VALUES (?, ?, ?, ?, ?)'\n    ).run(\n        ts,\n        capteur,\n        p.temperature,\n        hum,\n        typeof p.battery === 'number' ? Math.round(p.battery) : null\n    );\n    const n = db.prepare('SELECT COUNT(*) AS c FROM mesures').get().c;\n    node.status({ fill: 'green', shape: 'dot', text: n + ' mesures — ' + capteur + ' ' + p.temperature + '°C' });\n} catch (e) {\n    node.error('insertion SQLite : ' + e.message, msg);\n    node.status({ fill: 'red', shape: 'dot', text: e.message });\n}\nreturn null;",
+        "outputs": 0,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "// Ouvre la base une fois au demarrage du flow. SQLite natif de Node 24\n// (expose via functionGlobalContext dans settings.js) : zero dependance npm.\nconst { DatabaseSync } = global.get('sqlite');\nconst db = new DatabaseSync('/data/thermo.db');\n\n// WAL : lectures concurrentes possibles pendant une ecriture, et moins\n// d'ecritures sur la carte SD que le mode rollback par defaut.\ndb.exec('PRAGMA journal_mode = WAL');\ndb.exec('PRAGMA synchronous = NORMAL');\n\n// La cle primaire (ts, capteur) rend l'insertion idempotente : rejouer un\n// message MQTT retained ne cree pas de doublon.\ndb.exec(`CREATE TABLE IF NOT EXISTS mesures (\n  ts       INTEGER NOT NULL,\n  capteur  TEXT    NOT NULL,\n  temp     REAL,\n  hum      REAL,\n  batterie INTEGER,\n  PRIMARY KEY (ts, capteur)\n)`);\ndb.exec('CREATE INDEX IF NOT EXISTS idx_capteur_ts ON mesures(capteur, ts)');\n\ncontext.set('db', db);\nconst n = db.prepare('SELECT COUNT(*) AS c FROM mesures').get().c;\nnode.status({ fill: 'green', shape: 'ring', text: n + ' mesures en base' });",
+        "finalize": "// Ferme proprement au redeploy, sinon le fichier WAL reste verrouille.\nconst db = context.get('db');\nif (db) { try { db.close(); } catch (e) { /* deja fermee */ } }",
+        "libs": [],
+        "x": 550,
+        "y": 290,
+        "wires": []
+    },
+    {
+        "id": "inject_load",
+        "type": "inject",
+        "z": "f_thermo",
+        "name": "au démarrage",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "8",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 320,
+        "y": 360,
+        "wires": [
+            [
+                "fn_db_load"
+            ]
+        ]
+    },
+    {
+        "id": "fn_db_load",
+        "type": "function",
+        "z": "f_thermo",
+        "name": "SQLite : recharge 24 h",
+        "func": "// Rejoue les 24 dernieres heures depuis SQLite pour que la courbe ne\n// reparte pas de zero a chaque redeploy. Ouverture ponctuelle : ce node\n// ne tourne qu'au demarrage, inutile de garder une connexion ouverte.\nconst { DatabaseSync } = global.get('sqlite');\nlet db;\ntry {\n    db = new DatabaseSync('/data/thermo.db');\n    const depuis = Date.now() - 24 * 3600 * 1000;\n    const lignes = db.prepare(\n        'SELECT ts, capteur, temp FROM mesures WHERE ts >= ? AND temp IS NOT NULL ORDER BY ts'\n    ).all(depuis);\n\n    if (!lignes.length) {\n        node.status({ fill: 'grey', shape: 'ring', text: 'aucun historique sur 24 h' });\n        return null;\n    }\n\n    msg.payload = lignes.map(l => ({ ts: Number(l.ts), temp: l.temp, capteur: l.capteur }));\n    msg.action = 'replace';   // remplace le contenu du graphe au lieu de s'y ajouter\n    node.status({ fill: 'green', shape: 'dot', text: lignes.length + ' points rechargés' });\n    return msg;\n} catch (e) {\n    node.error('lecture historique : ' + e.message);\n    node.status({ fill: 'red', shape: 'dot', text: e.message });\n    return null;\n} finally {\n    if (db) { try { db.close(); } catch (e) { /* ignore */ } }\n}",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 550,
+        "y": 360,
+        "wires": [
+            [
+                "ui_chart_hist"
+            ]
+        ]
+    },
+    {
+        "id": "http_in_resume",
+        "type": "http in",
+        "z": "f_thermo",
+        "name": "GET /thermo/resume",
+        "url": "/thermo/resume",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 180,
+        "y": 470,
+        "wires": [
+            [
+                "fn_resume"
+            ]
+        ]
+    },
+    {
+        "id": "fn_resume",
+        "type": "function",
+        "z": "f_thermo",
+        "name": "résumé parlé (historique)",
+        "func": "// Resume parle destine a Siri : valeur actuelle + min/max 24 h + comparaison\n// avec hier a la meme heure. Toutes les parties sont optionnelles : au debut il\n// n'y a qu'une mesure en base, la phrase se reduit d'elle-meme.\nconst { DatabaseSync } = global.get('sqlite');\n\nconst capteur = (msg.req && msg.req.query && msg.req.query.capteur) || 'Chambre Axel';\nconst LIEUX = { 'Chambre Axel': \"dans la chambre d'Axel\", 'Exterieur': 'dehors', 'Extérieur': 'dehors' };\nconst lieu = LIEUX[capteur] || ('pour ' + capteur);\n\nconst repondre = (t) => {\n    msg.payload = t;\n    msg.headers = { 'Content-Type': 'text/plain; charset=utf-8' };\n    return msg;\n};\n// Accord singulier/pluriel : \"1 degre de plus\", \"2 degres de plus\".\nconst degres = (v) => Math.abs(v) < 2 ? v + ' degré' : v + ' degrés';\n\nlet db;\ntry {\n    db = new DatabaseSync('/data/thermo.db');\n\n    const der = db.prepare(\n        'SELECT ts, temp, hum FROM mesures WHERE capteur = ? ORDER BY ts DESC LIMIT 1'\n    ).get(capteur);\n    if (!der) return repondre(\"Je n'ai pas encore de mesure \" + lieu + '.');\n\n    const maintenant = Date.now();\n    let phrase = 'Il fait ' + der.temp + ' degrés ' + lieu;\n    if (der.hum !== null) phrase += ', avec ' + Math.round(der.hum) + \" pour cent d'humidité\";\n    phrase += '.';\n\n    // Min/max sur 24 h — seulement si on a de quoi faire une fourchette.\n    const bornes = db.prepare(\n        'SELECT MIN(temp) AS mn, MAX(temp) AS mx, COUNT(*) AS n FROM mesures WHERE capteur = ? AND ts >= ?'\n    ).get(capteur, maintenant - 24 * 3600 * 1000);\n    if (bornes && bornes.n > 2 && bornes.mx > bornes.mn) {\n        phrase += ' Sur les dernières 24 heures, entre ' + bornes.mn + ' et ' + bornes.mx + ' degrés.';\n    }\n\n    // Hier a la meme heure : mesure la plus proche de T-24 h, tolerance +/- 1 h.\n    const cible = maintenant - 24 * 3600 * 1000;\n    const hier = db.prepare(\n        'SELECT temp FROM mesures WHERE capteur = ? AND ts BETWEEN ? AND ? ORDER BY ABS(ts - ?) LIMIT 1'\n    ).get(capteur, cible - 3600 * 1000, cible + 3600 * 1000, cible);\n    if (hier) {\n        const ecart = Math.round((der.temp - hier.temp) * 10) / 10;\n        if (Math.abs(ecart) < 0.2) phrase += \" C'est autant qu'hier à la même heure.\";\n        else phrase += \" C'est \" + degres(Math.abs(ecart)) + (ecart > 0 ? ' de plus' : ' de moins') + \" qu'hier à la même heure.\";\n    }\n\n    // Prevenir si la mesure est vieille : le capteur est peut-etre muet.\n    const ageMin = Math.round((maintenant - Number(der.ts)) / 60000);\n    if (ageMin > 150) {\n        phrase += ' Attention, cette mesure date de ' + Math.round(ageMin / 60) + ' heures.';\n    }\n\n    return repondre(phrase);\n} catch (e) {\n    node.error('resume : ' + e.message);\n    return repondre('Je ne peux pas lire l\\'historique pour le moment.');\n} finally {\n    if (db) { try { db.close(); } catch (e) { /* ignore */ } }\n}",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 400,
+        "y": 470,
+        "wires": [
+            [
+                "http_resp"
+            ]
+        ]
+    },
+    {
+        "id": "sw_cards",
+        "type": "switch",
+        "z": "f_thermo",
+        "name": "vers la bonne card",
+        "property": "capteur",
+        "propertyType": "msg",
+        "rules": [
+            {
+                "t": "eq",
+                "v": "Bureau",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "Chambre Axel",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "Cuisine",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "Extérieur",
+                "vt": "str"
+            }
+        ],
+        "checkall": "false",
+        "repair": false,
+        "outputs": 4,
+        "x": 530,
+        "y": 100,
+        "wires": [
+            [
+                "ui_card_bureau"
+            ],
+            [
+                "ui_card_chambre"
+            ],
+            [
+                "ui_card_cuisine"
+            ],
+            [
+                "ui_card_exterieur"
+            ]
+        ]
+    },
+    {
+        "id": "grp_bureau",
+        "type": "ui-group",
+        "name": "Bureau",
+        "page": "uipg",
+        "width": "6",
+        "height": "1",
+        "order": 1,
+        "showTitle": true,
+        "visible": true,
+        "disabled": false,
+        "groupType": "default"
+    },
+    {
+        "id": "ui_card_bureau",
+        "type": "ui-template",
+        "z": "f_thermo",
+        "group": "grp_bureau",
+        "name": "Carte Bureau",
+        "order": 1,
+        "width": "6",
+        "height": "0",
+        "format": "<template>\n  <div class=\"thermo-card\">\n    <div class=\"col-temp\" :style=\"{ color: couleur }\">{{ temp }}<span class=\"unit\">°C</span></div>\n    <div class=\"col-info\">\n      <div class=\"metrics\">\n        <span class=\"metric\"><span class=\"ic\">💧</span>{{ hum }}<span class=\"u\">%</span></span>\n        <span class=\"metric\" :class=\"{ faible: battFaible }\"><span class=\"ic\">🔋</span>{{ batt }}<span class=\"u\">%</span></span>\n      </div>\n      <div class=\"ts\" :class=\"{ muet: muet }\"><span v-if=\"sig !== null\" class=\"sig\"><span class=\"barres\">{{ barres }}</span>{{ sig }}</span>{{ vu }}</div>\n    </div>\n  </div>\n</template>\n<script>\nexport default {\n  data () {\n    return { temp: '—', hum: '—', batt: '—', vu: 'en attente…', muet: false, sig: null,\n             battFaible: false, couleur: '#8a8a8a', mesureLe: null, minuteur: null }\n  },\n  computed: {\n    // linkquality va de 0 a 255. Un palier tous les 64 donne 4 niveaux qui\n    // collent aux valeurs observees ici : 220 -> 4, 148 -> 3, 116 -> 2, 60 -> 1.\n    barres () {\n      if (this.sig === null) return ''\n      const n = Math.min(4, Math.max(1, Math.ceil(this.sig / 64)))\n      return '▮'.repeat(n) + '▯'.repeat(4 - n)\n    }\n  },\n  methods: {\n    // Lecture instantanee de l'ambiance, utile surtout pour l'exterieur.\n    teinte (t) {\n      if (t === null || t === undefined) return '#8a8a8a'\n      if (t <= 0) return '#4fc3f7'\n      if (t < 10) return '#4dd0e1'\n      if (t < 18) return '#81c784'\n      if (t < 25) return '#ffb74d'\n      if (t < 29) return '#ff7043'\n      return '#ef5350'\n    },\n    rafraichir () {\n      if (!this.mesureLe) return\n      const min = Math.round((Date.now() - this.mesureLe.getTime()) / 60000)\n      const pad = n => String(n).padStart(2, '0')\n      if (min < 1) this.vu = \"à l'instant\"\n      else if (min < 90) this.vu = 'il y a ' + min + ' min'\n      else this.vu = 'à ' + pad(this.mesureLe.getHours()) + ':' + pad(this.mesureLe.getMinutes())\n      // Le SNZB-02D rapporte au changement ou ~1x/h : au-dela de 3 h il est muet.\n      this.muet = min > 180\n    }\n  },\n  mounted () { this.minuteur = setInterval(this.rafraichir, 30000) },\n  unmounted () { if (this.minuteur) clearInterval(this.minuteur) },\n  watch: {\n    msg: function (m) {\n      if (!m || !m.payload) return\n      const p = m.payload\n      if (p.linkquality !== null && p.linkquality !== undefined) this.sig = p.linkquality\n      if (p.temperature !== null && p.temperature !== undefined) {\n        this.temp = p.temperature.toFixed(1)\n        this.couleur = this.teinte(p.temperature)\n      }\n      if (p.humidity !== null && p.humidity !== undefined) this.hum = Math.round(p.humidity)\n      if (p.battery !== null && p.battery !== undefined) {\n        this.batt = p.battery\n        this.battFaible = p.battery < 20\n      }\n      // Date du CAPTEUR (last_seen), pas l'heure de reception : un message\n      // retained afficherait sinon l'heure de connexion du navigateur.\n      this.mesureLe = p.last_seen ? new Date(p.last_seen) : new Date()\n      this.rafraichir()\n    }\n  }\n}\n</script>\n<style>\n.thermo-card { font-variant-numeric:tabular-nums; display:flex; align-items:center; justify-content:center; gap:26px; padding:2px 12px; font-family:system-ui,-apple-system,sans-serif; }\n.col-temp { font-size:3.4rem; font-weight:800; line-height:1; letter-spacing:-1px; white-space:nowrap; transition:color .4s ease; }\n.col-temp .unit { font-size:1.3rem; font-weight:600; opacity:.6; margin-left:2px; }\n/* Une moitie de carte pour chaque div fille, contenu centre dans sa moitie.\n   Sinon leur largeur depend de la longueur du texte ('a l'instant' vs\n   'il y a 10 min') et la temperature ne tombe pas au meme endroit d'une carte\n   a l'autre. */\n.thermo-card > .col-temp { flex:1 1 0; display:flex; justify-content:center; }\n.thermo-card > .col-info { flex:1 1 0; }\n.col-info { display:flex; flex-direction:column; gap:7px; align-items:center; text-align:center; }\n.metrics { display:flex; gap:20px; justify-content:center; }\n.metric { font-size:1.25rem; font-weight:600; display:flex; align-items:center; gap:6px; }\n.metric.faible { color:#ef5350; }\n.metric .u { font-size:.85rem; opacity:.6; margin-left:1px; }\n.ic { font-size:1.3rem; }\n.ts { font-size:.74rem; opacity:.55; }\n.ts.muet { color:#ef5350; opacity:.9; }\n.barres { letter-spacing:1px; margin-right:7px; }\n.sig { margin-right:32px; }\n@media (max-width:600px) {\n  .thermo-card { gap:14px; padding:2px 4px; }\n  .col-temp { font-size:2.8rem; }\n  .metrics { gap:14px; }\n  .metric { font-size:1.1rem; }\n  .ic { font-size:1.15rem; }\n  .sig { margin-right:18px; }\n}\n</style>",
+        "storeOutMessages": true,
+        "passthru": false,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "x": 740,
+        "y": 40,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "grp_chambre",
+        "type": "ui-group",
+        "name": "Chambre Axel",
+        "page": "uipg",
+        "width": "6",
+        "height": "1",
+        "order": 2,
+        "showTitle": true,
+        "visible": true,
+        "disabled": false,
+        "groupType": "default"
+    },
+    {
+        "id": "ui_card_chambre",
+        "type": "ui-template",
+        "z": "f_thermo",
+        "group": "grp_chambre",
+        "name": "Carte Chambre Axel",
+        "order": 1,
+        "width": "6",
+        "height": "0",
+        "format": "<template>\n  <div class=\"thermo-card\">\n    <div class=\"col-temp\" :style=\"{ color: couleur }\">{{ temp }}<span class=\"unit\">°C</span></div>\n    <div class=\"col-info\">\n      <div class=\"metrics\">\n        <span class=\"metric\"><span class=\"ic\">💧</span>{{ hum }}<span class=\"u\">%</span></span>\n        <span class=\"metric\" :class=\"{ faible: battFaible }\"><span class=\"ic\">🔋</span>{{ batt }}<span class=\"u\">%</span></span>\n      </div>\n      <div class=\"ts\" :class=\"{ muet: muet }\"><span v-if=\"sig !== null\" class=\"sig\"><span class=\"barres\">{{ barres }}</span>{{ sig }}</span>{{ vu }}</div>\n    </div>\n  </div>\n</template>\n<script>\nexport default {\n  data () {\n    return { temp: '—', hum: '—', batt: '—', vu: 'en attente…', muet: false, sig: null,\n             battFaible: false, couleur: '#8a8a8a', mesureLe: null, minuteur: null }\n  },\n  computed: {\n    // linkquality va de 0 a 255. Un palier tous les 64 donne 4 niveaux qui\n    // collent aux valeurs observees ici : 220 -> 4, 148 -> 3, 116 -> 2, 60 -> 1.\n    barres () {\n      if (this.sig === null) return ''\n      const n = Math.min(4, Math.max(1, Math.ceil(this.sig / 64)))\n      return '▮'.repeat(n) + '▯'.repeat(4 - n)\n    }\n  },\n  methods: {\n    // Lecture instantanee de l'ambiance, utile surtout pour l'exterieur.\n    teinte (t) {\n      if (t === null || t === undefined) return '#8a8a8a'\n      if (t <= 0) return '#4fc3f7'\n      if (t < 10) return '#4dd0e1'\n      if (t < 18) return '#81c784'\n      if (t < 25) return '#ffb74d'\n      if (t < 29) return '#ff7043'\n      return '#ef5350'\n    },\n    rafraichir () {\n      if (!this.mesureLe) return\n      const min = Math.round((Date.now() - this.mesureLe.getTime()) / 60000)\n      const pad = n => String(n).padStart(2, '0')\n      if (min < 1) this.vu = \"à l'instant\"\n      else if (min < 90) this.vu = 'il y a ' + min + ' min'\n      else this.vu = 'à ' + pad(this.mesureLe.getHours()) + ':' + pad(this.mesureLe.getMinutes())\n      // Le SNZB-02D rapporte au changement ou ~1x/h : au-dela de 3 h il est muet.\n      this.muet = min > 180\n    }\n  },\n  mounted () { this.minuteur = setInterval(this.rafraichir, 30000) },\n  unmounted () { if (this.minuteur) clearInterval(this.minuteur) },\n  watch: {\n    msg: function (m) {\n      if (!m || !m.payload) return\n      const p = m.payload\n      if (p.linkquality !== null && p.linkquality !== undefined) this.sig = p.linkquality\n      if (p.temperature !== null && p.temperature !== undefined) {\n        this.temp = p.temperature.toFixed(1)\n        this.couleur = this.teinte(p.temperature)\n      }\n      if (p.humidity !== null && p.humidity !== undefined) this.hum = Math.round(p.humidity)\n      if (p.battery !== null && p.battery !== undefined) {\n        this.batt = p.battery\n        this.battFaible = p.battery < 20\n      }\n      // Date du CAPTEUR (last_seen), pas l'heure de reception : un message\n      // retained afficherait sinon l'heure de connexion du navigateur.\n      this.mesureLe = p.last_seen ? new Date(p.last_seen) : new Date()\n      this.rafraichir()\n    }\n  }\n}\n</script>\n<style>\n.thermo-card { font-variant-numeric:tabular-nums; display:flex; align-items:center; justify-content:center; gap:26px; padding:2px 12px; font-family:system-ui,-apple-system,sans-serif; }\n.col-temp { font-size:3.4rem; font-weight:800; line-height:1; letter-spacing:-1px; white-space:nowrap; transition:color .4s ease; }\n.col-temp .unit { font-size:1.3rem; font-weight:600; opacity:.6; margin-left:2px; }\n/* Une moitie de carte pour chaque div fille, contenu centre dans sa moitie.\n   Sinon leur largeur depend de la longueur du texte ('a l'instant' vs\n   'il y a 10 min') et la temperature ne tombe pas au meme endroit d'une carte\n   a l'autre. */\n.thermo-card > .col-temp { flex:1 1 0; display:flex; justify-content:center; }\n.thermo-card > .col-info { flex:1 1 0; }\n.col-info { display:flex; flex-direction:column; gap:7px; align-items:center; text-align:center; }\n.metrics { display:flex; gap:20px; justify-content:center; }\n.metric { font-size:1.25rem; font-weight:600; display:flex; align-items:center; gap:6px; }\n.metric.faible { color:#ef5350; }\n.metric .u { font-size:.85rem; opacity:.6; margin-left:1px; }\n.ic { font-size:1.3rem; }\n.ts { font-size:.74rem; opacity:.55; }\n.ts.muet { color:#ef5350; opacity:.9; }\n.barres { letter-spacing:1px; margin-right:7px; }\n.sig { margin-right:32px; }\n@media (max-width:600px) {\n  .thermo-card { gap:14px; padding:2px 4px; }\n  .col-temp { font-size:2.8rem; }\n  .metrics { gap:14px; }\n  .metric { font-size:1.1rem; }\n  .ic { font-size:1.15rem; }\n  .sig { margin-right:18px; }\n}\n</style>",
+        "storeOutMessages": true,
+        "passthru": false,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "x": 740,
+        "y": 85,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "grp_cuisine",
+        "type": "ui-group",
+        "name": "Cuisine",
+        "page": "uipg",
+        "width": "6",
+        "height": "1",
+        "order": 3,
+        "showTitle": true,
+        "visible": true,
+        "disabled": false,
+        "groupType": "default"
+    },
+    {
+        "id": "ui_card_cuisine",
+        "type": "ui-template",
+        "z": "f_thermo",
+        "group": "grp_cuisine",
+        "name": "Carte Cuisine",
+        "order": 1,
+        "width": "6",
+        "height": "0",
+        "format": "<template>\n  <div class=\"thermo-card\">\n    <div class=\"col-temp\" :style=\"{ color: couleur }\">{{ temp }}<span class=\"unit\">°C</span></div>\n    <div class=\"col-info\">\n      <div class=\"metrics\">\n        <span class=\"metric\"><span class=\"ic\">💧</span>{{ hum }}<span class=\"u\">%</span></span>\n        <span class=\"metric\" :class=\"{ faible: battFaible }\"><span class=\"ic\">🔋</span>{{ batt }}<span class=\"u\">%</span></span>\n      </div>\n      <div class=\"ts\" :class=\"{ muet: muet }\"><span v-if=\"sig !== null\" class=\"sig\"><span class=\"barres\">{{ barres }}</span>{{ sig }}</span>{{ vu }}</div>\n    </div>\n  </div>\n</template>\n<script>\nexport default {\n  data () {\n    return { temp: '—', hum: '—', batt: '—', vu: 'en attente…', muet: false, sig: null,\n             battFaible: false, couleur: '#8a8a8a', mesureLe: null, minuteur: null }\n  },\n  computed: {\n    // linkquality va de 0 a 255. Un palier tous les 64 donne 4 niveaux qui\n    // collent aux valeurs observees ici : 220 -> 4, 148 -> 3, 116 -> 2, 60 -> 1.\n    barres () {\n      if (this.sig === null) return ''\n      const n = Math.min(4, Math.max(1, Math.ceil(this.sig / 64)))\n      return '▮'.repeat(n) + '▯'.repeat(4 - n)\n    }\n  },\n  methods: {\n    // Lecture instantanee de l'ambiance, utile surtout pour l'exterieur.\n    teinte (t) {\n      if (t === null || t === undefined) return '#8a8a8a'\n      if (t <= 0) return '#4fc3f7'\n      if (t < 10) return '#4dd0e1'\n      if (t < 18) return '#81c784'\n      if (t < 25) return '#ffb74d'\n      if (t < 29) return '#ff7043'\n      return '#ef5350'\n    },\n    rafraichir () {\n      if (!this.mesureLe) return\n      const min = Math.round((Date.now() - this.mesureLe.getTime()) / 60000)\n      const pad = n => String(n).padStart(2, '0')\n      if (min < 1) this.vu = \"à l'instant\"\n      else if (min < 90) this.vu = 'il y a ' + min + ' min'\n      else this.vu = 'à ' + pad(this.mesureLe.getHours()) + ':' + pad(this.mesureLe.getMinutes())\n      // Le SNZB-02D rapporte au changement ou ~1x/h : au-dela de 3 h il est muet.\n      this.muet = min > 180\n    }\n  },\n  mounted () { this.minuteur = setInterval(this.rafraichir, 30000) },\n  unmounted () { if (this.minuteur) clearInterval(this.minuteur) },\n  watch: {\n    msg: function (m) {\n      if (!m || !m.payload) return\n      const p = m.payload\n      if (p.linkquality !== null && p.linkquality !== undefined) this.sig = p.linkquality\n      if (p.temperature !== null && p.temperature !== undefined) {\n        this.temp = p.temperature.toFixed(1)\n        this.couleur = this.teinte(p.temperature)\n      }\n      if (p.humidity !== null && p.humidity !== undefined) this.hum = Math.round(p.humidity)\n      if (p.battery !== null && p.battery !== undefined) {\n        this.batt = p.battery\n        this.battFaible = p.battery < 20\n      }\n      // Date du CAPTEUR (last_seen), pas l'heure de reception : un message\n      // retained afficherait sinon l'heure de connexion du navigateur.\n      this.mesureLe = p.last_seen ? new Date(p.last_seen) : new Date()\n      this.rafraichir()\n    }\n  }\n}\n</script>\n<style>\n.thermo-card { font-variant-numeric:tabular-nums; display:flex; align-items:center; justify-content:center; gap:26px; padding:2px 12px; font-family:system-ui,-apple-system,sans-serif; }\n.col-temp { font-size:3.4rem; font-weight:800; line-height:1; letter-spacing:-1px; white-space:nowrap; transition:color .4s ease; }\n.col-temp .unit { font-size:1.3rem; font-weight:600; opacity:.6; margin-left:2px; }\n/* Une moitie de carte pour chaque div fille, contenu centre dans sa moitie.\n   Sinon leur largeur depend de la longueur du texte ('a l'instant' vs\n   'il y a 10 min') et la temperature ne tombe pas au meme endroit d'une carte\n   a l'autre. */\n.thermo-card > .col-temp { flex:1 1 0; display:flex; justify-content:center; }\n.thermo-card > .col-info { flex:1 1 0; }\n.col-info { display:flex; flex-direction:column; gap:7px; align-items:center; text-align:center; }\n.metrics { display:flex; gap:20px; justify-content:center; }\n.metric { font-size:1.25rem; font-weight:600; display:flex; align-items:center; gap:6px; }\n.metric.faible { color:#ef5350; }\n.metric .u { font-size:.85rem; opacity:.6; margin-left:1px; }\n.ic { font-size:1.3rem; }\n.ts { font-size:.74rem; opacity:.55; }\n.ts.muet { color:#ef5350; opacity:.9; }\n.barres { letter-spacing:1px; margin-right:7px; }\n.sig { margin-right:32px; }\n@media (max-width:600px) {\n  .thermo-card { gap:14px; padding:2px 4px; }\n  .col-temp { font-size:2.8rem; }\n  .metrics { gap:14px; }\n  .metric { font-size:1.1rem; }\n  .ic { font-size:1.15rem; }\n  .sig { margin-right:18px; }\n}\n</style>",
+        "storeOutMessages": true,
+        "passthru": false,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "x": 740,
+        "y": 130,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "grp_exterieur",
+        "type": "ui-group",
+        "name": "Extérieur",
+        "page": "uipg",
+        "width": "6",
+        "height": "1",
+        "order": 4,
+        "showTitle": true,
+        "visible": true,
+        "disabled": false,
+        "groupType": "default"
+    },
+    {
+        "id": "ui_card_exterieur",
+        "type": "ui-template",
+        "z": "f_thermo",
+        "group": "grp_exterieur",
+        "name": "Carte Extérieur",
+        "order": 1,
+        "width": "6",
+        "height": "0",
+        "format": "<template>\n  <div class=\"thermo-card\">\n    <div class=\"col-temp\" :style=\"{ color: couleur }\">{{ temp }}<span class=\"unit\">°C</span></div>\n    <div class=\"col-info\">\n      <div class=\"metrics\">\n        <span class=\"metric\"><span class=\"ic\">💧</span>{{ hum }}<span class=\"u\">%</span></span>\n        <span class=\"metric\" :class=\"{ faible: battFaible }\"><span class=\"ic\">🔋</span>{{ batt }}<span class=\"u\">%</span></span>\n      </div>\n      <div class=\"ts\" :class=\"{ muet: muet }\"><span v-if=\"sig !== null\" class=\"sig\"><span class=\"barres\">{{ barres }}</span>{{ sig }}</span>{{ vu }}</div>\n    </div>\n  </div>\n</template>\n<script>\nexport default {\n  data () {\n    return { temp: '—', hum: '—', batt: '—', vu: 'en attente…', muet: false, sig: null,\n             battFaible: false, couleur: '#8a8a8a', mesureLe: null, minuteur: null }\n  },\n  computed: {\n    // linkquality va de 0 a 255. Un palier tous les 64 donne 4 niveaux qui\n    // collent aux valeurs observees ici : 220 -> 4, 148 -> 3, 116 -> 2, 60 -> 1.\n    barres () {\n      if (this.sig === null) return ''\n      const n = Math.min(4, Math.max(1, Math.ceil(this.sig / 64)))\n      return '▮'.repeat(n) + '▯'.repeat(4 - n)\n    }\n  },\n  methods: {\n    // Lecture instantanee de l'ambiance, utile surtout pour l'exterieur.\n    teinte (t) {\n      if (t === null || t === undefined) return '#8a8a8a'\n      if (t <= 0) return '#4fc3f7'\n      if (t < 10) return '#4dd0e1'\n      if (t < 18) return '#81c784'\n      if (t < 25) return '#ffb74d'\n      if (t < 29) return '#ff7043'\n      return '#ef5350'\n    },\n    rafraichir () {\n      if (!this.mesureLe) return\n      const min = Math.round((Date.now() - this.mesureLe.getTime()) / 60000)\n      const pad = n => String(n).padStart(2, '0')\n      if (min < 1) this.vu = \"à l'instant\"\n      else if (min < 90) this.vu = 'il y a ' + min + ' min'\n      else this.vu = 'à ' + pad(this.mesureLe.getHours()) + ':' + pad(this.mesureLe.getMinutes())\n      // Le SNZB-02D rapporte au changement ou ~1x/h : au-dela de 3 h il est muet.\n      this.muet = min > 180\n    }\n  },\n  mounted () { this.minuteur = setInterval(this.rafraichir, 30000) },\n  unmounted () { if (this.minuteur) clearInterval(this.minuteur) },\n  watch: {\n    msg: function (m) {\n      if (!m || !m.payload) return\n      const p = m.payload\n      if (p.linkquality !== null && p.linkquality !== undefined) this.sig = p.linkquality\n      if (p.temperature !== null && p.temperature !== undefined) {\n        this.temp = p.temperature.toFixed(1)\n        this.couleur = this.teinte(p.temperature)\n      }\n      if (p.humidity !== null && p.humidity !== undefined) this.hum = Math.round(p.humidity)\n      if (p.battery !== null && p.battery !== undefined) {\n        this.batt = p.battery\n        this.battFaible = p.battery < 20\n      }\n      // Date du CAPTEUR (last_seen), pas l'heure de reception : un message\n      // retained afficherait sinon l'heure de connexion du navigateur.\n      this.mesureLe = p.last_seen ? new Date(p.last_seen) : new Date()\n      this.rafraichir()\n    }\n  }\n}\n</script>\n<style>\n.thermo-card { font-variant-numeric:tabular-nums; display:flex; align-items:center; justify-content:center; gap:26px; padding:2px 12px; font-family:system-ui,-apple-system,sans-serif; }\n.col-temp { font-size:3.4rem; font-weight:800; line-height:1; letter-spacing:-1px; white-space:nowrap; transition:color .4s ease; }\n.col-temp .unit { font-size:1.3rem; font-weight:600; opacity:.6; margin-left:2px; }\n/* Une moitie de carte pour chaque div fille, contenu centre dans sa moitie.\n   Sinon leur largeur depend de la longueur du texte ('a l'instant' vs\n   'il y a 10 min') et la temperature ne tombe pas au meme endroit d'une carte\n   a l'autre. */\n.thermo-card > .col-temp { flex:1 1 0; display:flex; justify-content:center; }\n.thermo-card > .col-info { flex:1 1 0; }\n.col-info { display:flex; flex-direction:column; gap:7px; align-items:center; text-align:center; }\n.metrics { display:flex; gap:20px; justify-content:center; }\n.metric { font-size:1.25rem; font-weight:600; display:flex; align-items:center; gap:6px; }\n.metric.faible { color:#ef5350; }\n.metric .u { font-size:.85rem; opacity:.6; margin-left:1px; }\n.ic { font-size:1.3rem; }\n.ts { font-size:.74rem; opacity:.55; }\n.ts.muet { color:#ef5350; opacity:.9; }\n.barres { letter-spacing:1px; margin-right:7px; }\n.sig { margin-right:32px; }\n@media (max-width:600px) {\n  .thermo-card { gap:14px; padding:2px 4px; }\n  .col-temp { font-size:2.8rem; }\n  .metrics { gap:14px; }\n  .metric { font-size:1.1rem; }\n  .ic { font-size:1.15rem; }\n  .sig { margin-right:18px; }\n}\n</style>",
+        "storeOutMessages": true,
+        "passthru": false,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "x": 740,
+        "y": 175,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "grp_meteo",
+        "type": "ui-group",
+        "name": "Météo — La Riche",
+        "page": "uipg",
+        "width": "12",
+        "height": "1",
+        "order": 5,
+        "showTitle": true,
+        "className": "",
+        "visible": true,
+        "disabled": false
+    },
+    {
+        "id": "grp_prev",
+        "type": "ui-group",
+        "name": "Prévisions 7 jours",
+        "page": "uipg",
+        "width": "12",
+        "height": "1",
+        "order": 6,
+        "showTitle": true,
+        "className": "",
+        "visible": true,
+        "disabled": false
+    },
+    {
+        "id": "grp_hist",
+        "type": "ui-group",
+        "name": "Historique 24 h",
+        "page": "uipg",
+        "width": "12",
+        "height": "1",
+        "order": 7,
+        "showTitle": true,
+        "visible": true,
+        "disabled": false,
+        "groupType": "default"
+    },
+    {
+        "id": "fn_fenetre",
+        "type": "function",
+        "z": "f_thermo",
+        "name": "fenêtre : ouvrir / fermer",
+        "func": "// Faut-il ouvrir la fenetre de la chambre d'Axel ? Compare l'exterieur a la\n// chambre. Deux usages dans le meme node : le flux MQTT (sortie 1 = notif ntfy,\n// uniquement si l'etat change) et une requete HTTP (sortie 2 = reponse parlee).\n\n// Zone morte de 1,5 C entre les deux bascules : les capteurs sont coherents a\n// +/-0,3 C, sans hysteresis on basculerait sans arret autour de l'egalite.\nconst MARGE_OUVRIR = 1.0;   // dehors doit etre 1 C plus frais pour dire \"ouvre\"\nconst MARGE_FERMER = 0.5;   // et 0,5 C plus chaud pour dire \"ferme\"\nconst FRAICHEUR = 60 * 60 * 1000;   // au-dela, la mesure n'est plus fiable\n\nconst estRequete = !!msg.req;\nconst { DatabaseSync } = global.get('sqlite');\nconst un = (v) => Math.abs(v) < 2 ? v + ' degré' : v + ' degrés';\n\nlet db;\ntry {\n    db = new DatabaseSync('/data/thermo.db');\n    const lire = (c) => db.prepare(\n        'SELECT ts, temp FROM mesures WHERE capteur = ? AND temp IS NOT NULL ORDER BY ts DESC LIMIT 1'\n    ).get(c);\n    const ext = lire('Extérieur');\n    const ch  = lire('Chambre Axel');\n\n    // Sans les deux mesures, ou avec une mesure perimee, on ne decide rien :\n    // mieux vaut se taire que conseiller d'apres une valeur morte.\n    const maintenant = Date.now();\n    const perime = (m) => !m || (maintenant - Number(m.ts)) > FRAICHEUR;\n    if (perime(ext) || perime(ch)) {\n        if (!estRequete) return [null, null];\n        msg.payload = \"Je n'ai pas de mesure assez récente pour comparer l'extérieur et la chambre d'Axel.\";\n        msg.headers = { 'Content-Type': 'text/plain; charset=utf-8' };\n        return [null, msg];\n    }\n\n    const delta = Math.round((ext.temp - ch.temp) * 10) / 10;   // negatif = plus frais dehors\n    const ecart = Math.abs(delta);\n\n    let etat = flow.get('fenetre') || null;   // dernier etat NOTIFIE\n    let nouveau = etat;\n    if (delta <= -MARGE_OUVRIR) nouveau = 'ouvrir';\n    else if (delta >= MARGE_FERMER) nouveau = 'fermer';\n    // Entre les deux : zone morte, on conserve l'etat courant.\n\n    const phrases = {\n        ouvrir: 'Il fait ' + ext.temp + ' degrés dehors, ' + un(ecart) + \" de moins que dans la chambre d'Axel (\"\n                + ch.temp + '). Tu peux ouvrir la fenêtre.',\n        fermer: 'Il fait ' + ext.temp + ' degrés dehors, ' + un(ecart) + \" de plus que dans la chambre d'Axel (\"\n                + ch.temp + '). Mieux vaut fermer la fenêtre.',\n        neutre: 'Il fait ' + ext.temp + ' degrés dehors et ' + ch.temp + \" dans la chambre d'Axel : \"\n                + \"l'écart est trop faible pour que ça vaille la peine.\"\n    };\n\n    // --- Requete HTTP : on repond l'etat, sans jamais notifier ---\n    if (estRequete) {\n        msg.payload = phrases[nouveau] || phrases.neutre;\n        msg.headers = { 'Content-Type': 'text/plain; charset=utf-8' };\n        return [null, msg];\n    }\n\n    // --- Flux MQTT : notifier UNE SEULE FOIS, au changement d'etat ---\n    if (!nouveau || nouveau === etat) {\n        node.status({ fill: 'grey', shape: 'ring', text: (nouveau || 'neutre') + ' (delta ' + delta + ')' });\n        return [null, null];\n    }\n\n    flow.set('fenetre', nouveau);\n    node.status({ fill: 'green', shape: 'dot', text: 'notifié : ' + nouveau });\n    return [{\n        payload: phrases[nouveau],\n        headers: {\n            Title: nouveau === 'ouvrir' ? \"Ouvre la fenêtre d'Axel\" : \"Ferme la fenêtre d'Axel\",\n            Priority: 'default',\n            Tags: nouveau === 'ouvrir' ? 'baby,arrow_down' : 'baby,arrow_up'\n        }\n    }, null];\n} catch (e) {\n    node.error('fenêtre : ' + e.message);\n    return [null, null];\n} finally {\n    if (db) { try { db.close(); } catch (e) { /* ignore */ } }\n}",
+        "outputs": 2,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 560,
+        "y": 440,
+        "wires": [
+            [
+                "http_ntfy"
+            ],
+            [
+                "http_resp"
+            ]
+        ]
+    },
+    {
+        "id": "http_in_fenetre",
+        "type": "http in",
+        "z": "f_thermo",
+        "name": "GET /fenetre",
+        "url": "/fenetre",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 180,
+        "y": 540,
+        "wires": [
+            [
+                "fn_fenetre"
+            ]
+        ]
+    },
+    {
+        "id": "inj_meteo",
+        "type": "inject",
+        "z": "f_thermo",
+        "name": "au démarrage + toutes les 15 min",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "900",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "12",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 180,
+        "y": 760,
+        "wires": [
+            [
+                "req_meteo"
+            ]
+        ]
+    },
+    {
+        "id": "req_meteo",
+        "type": "http request",
+        "z": "f_thermo",
+        "name": "GET Open-Meteo",
+        "method": "GET",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "https://api.open-meteo.com/v1/forecast?latitude=47.39&longitude=0.6707&current=temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_min,temperature_2m_max,precipitation_sum,precipitation_probability_max&timezone=Europe%2FParis&forecast_days=7",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 450,
+        "y": 760,
+        "wires": [
+            [
+                "fn_meteo"
+            ]
+        ]
+    },
+    {
+        "id": "fn_meteo",
+        "type": "function",
+        "z": "f_thermo",
+        "name": "met en forme",
+        "func": "// Open-Meteo : gratuit, sans cle, et pour la France il s'appuie sur AROME\n// (Meteo-France). Les codes meteo suivent la nomenclature WMO 4677.\nvar d = msg.payload;\nif (!d || !d.current) return null;\n\nvar CIEL = {\n    0:  ['Ciel dégagé', '☀️'],          1:  ['Plutôt dégagé', '🌤️'],\n    2:  ['Partiellement nuageux', '⛅'], 3:  ['Couvert', '☁️'],\n    45: ['Brouillard', '🌫️'],           48: ['Brouillard givrant', '🌫️'],\n    51: ['Bruine légère', '🌦️'],        53: ['Bruine', '🌦️'],\n    55: ['Bruine dense', '🌦️'],         56: ['Bruine verglaçante', '🌧️'],\n    57: ['Bruine verglaçante dense', '🌧️'],\n    61: ['Pluie faible', '🌧️'],         63: ['Pluie', '🌧️'],\n    65: ['Pluie forte', '🌧️'],          66: ['Pluie verglaçante', '🌧️'],\n    67: ['Pluie verglaçante forte', '🌧️'],\n    71: ['Neige faible', '🌨️'],         73: ['Neige', '🌨️'],\n    75: ['Neige forte', '🌨️'],          77: ['Grains de neige', '🌨️'],\n    80: ['Averses faibles', '🌦️'],      81: ['Averses', '🌦️'],\n    82: ['Averses violentes', '⛈️'],     85: ['Averses de neige', '🌨️'],\n    86: ['Averses de neige fortes', '🌨️'],\n    95: ['Orage', '⛈️'],                96: ['Orage et grêle', '⛈️'],\n    99: ['Orage et forte grêle', '⛈️']\n};\n\nvar c = d.current;\nvar j = d.daily || {};\nvar ciel = CIEL[c.weather_code] || ['Code ' + c.weather_code, '❔'];\n\nvar JOURS = ['dim', 'lun', 'mar', 'mer', 'jeu', 'ven', 'sam'];\n\n// Midi pour se placer au milieu de la journee : evite qu'un decalage de fuseau\n// ne fasse basculer le nom du jour.\nfunction nomDuJour (iso) {\n    return JOURS[new Date(iso + 'T12:00:00').getDay()] + ' ' + iso.slice(8, 10) + '/' + iso.slice(5, 7);\n}\n\nvar jours = (j.time || []).map(function (t, i) {\n    var cj = CIEL[j.weather_code[i]] || ['Code ' + j.weather_code[i], '❔'];\n    return {\n        jour:  nomDuJour(t),\n        auj:   i === 0,\n        ciel:  cj[0],\n        icone: cj[1],\n        mini:  j.temperature_2m_min[i],\n        maxi:  j.temperature_2m_max[i],\n        cumul: j.precipitation_sum[i]\n    };\n});\n\n// Une sortie par carte : la table WMO ci-dessus n'existe qu'ici.\nreturn [\n    { payload: {                                            // 1. carte du jour\n        temp:     c.temperature_2m,\n        ressenti: c.apparent_temperature,\n        vent:     Math.round(c.wind_speed_10m),\n        ciel:     ciel[0],\n        icone:    ciel[1],\n        mini:     (j.temperature_2m_min || [])[0],\n        maxi:     (j.temperature_2m_max || [])[0],\n        pluie:    (j.precipitation_probability_max || [])[0],\n        releve:   c.time\n    } },\n    { payload: jours }                                      // 2. carte previsions\n];\n",
+        "outputs": 2,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 700,
+        "y": 760,
+        "wires": [
+            [
+                "ui_card_meteo"
+            ],
+            [
+                "ui_card_prev"
+            ]
+        ]
+    },
+    {
+        "id": "ui_card_meteo",
+        "type": "ui-template",
+        "z": "f_thermo",
+        "group": "grp_meteo",
+        "page": "",
+        "ui": "",
+        "name": "Carte Météo",
+        "order": 1,
+        "width": "12",
+        "height": "0",
+        "head": "",
+        "format": "<template>\n  <div class=\"meteo\" v-if=\"d\">\n    <div class=\"bloc-temp\" :style=\"{ color: couleur }\">{{ fmt(d.temp) }}<span class=\"unit\">°C</span></div>\n    <div class=\"bloc-ciel\">\n      <span class=\"icone\">{{ d.icone }}</span>\n      <div class=\"ciel\">\n        <div class=\"libelle\">{{ d.ciel }}</div>\n        <div class=\"releve\">relevé à {{ heure }}</div>\n      </div>\n    </div>\n    <div class=\"details\">\n      <div class=\"col\">\n        <span class=\"det\">{{ fmt(d.ressenti) }}°<span class=\"lbl\">ressenti</span></span>\n        <span class=\"det\">{{ fmt(d.mini) }}° / {{ fmt(d.maxi) }}°<span class=\"lbl\">mini / maxi</span></span>\n      </div>\n      <div class=\"col\">\n        <span class=\"det\"><span class=\"ic\">🌬️</span>{{ d.vent }}<span class=\"u\">km/h</span></span>\n        <span class=\"det\" :class=\"{ mouille: d.pluie >= 50 }\"><span class=\"ic\">☔</span>{{ d.pluie }}<span class=\"u\">%</span></span>\n      </div>\n    </div>\n  </div>\n  <div class=\"meteo attente\" v-else>en attente de la météo…</div>\n</template>\n<script>\nexport default {\n  data () { return { d: null } },\n  methods: {\n    // Toujours une decimale, pour que les valeurs s'alignent d'une carte a l'autre.\n    fmt (v) { return (v === null || v === undefined) ? '—' : v.toFixed(1) }\n  },\n  computed: {\n    heure () { return this.d ? this.d.releve.slice(11, 16) : '' },\n    // Meme echelle de teinte que les cartes de capteurs, pour que le dashboard\n    // se lise d'un seul coup d'oeil.\n    couleur () {\n      const t = this.d ? this.d.temp : null\n      if (t === null || t === undefined) return '#8a8a8a'\n      if (t <= 0) return '#4fc3f7'\n      if (t < 10) return '#4dd0e1'\n      if (t < 18) return '#81c784'\n      if (t < 25) return '#ffb74d'\n      if (t < 29) return '#ff7043'\n      return '#ef5350'\n    }\n  },\n  watch: { msg: function (m) { if (m && m.payload) this.d = m.payload } }\n}\n</script>\n<style>\n.meteo { font-variant-numeric:tabular-nums; display:flex; align-items:center; justify-content:space-between; gap:24px; flex-wrap:wrap;\n         padding:4px 14px; font-family:system-ui,-apple-system,sans-serif; }\n.meteo.attente { justify-content:center; font-size:.85rem; opacity:.5; }\n/* Meme principe que thermo-card : une part egale pour chacun des deux blocs,\n   contenu centre dedans, pour que la temperature ne se deplace pas selon la\n   longueur du libelle du ciel ('Couvert' vs 'Averses de neige fortes'). */\n.meteo > .bloc-ciel { flex:1 1 0; justify-content:center; }\n.meteo > .bloc-temp { flex:1 1 0; display:flex; justify-content:center; }\n.meteo > .details { flex:1 1 0; }\n.details > .col { flex:1 1 0; }\n.bloc-ciel { display:flex; align-items:center; gap:12px; }\n.icone { font-size:2.6rem; line-height:1; }\n.libelle { font-size:1.05rem; font-weight:600; }\n.releve { font-size:.72rem; opacity:.5; margin-top:2px; }\n.bloc-temp { font-size:3.4rem; font-weight:800; line-height:1; letter-spacing:-1px; white-space:nowrap;\n             transition:color .4s ease; }\n.bloc-temp .unit { font-size:1.3rem; font-weight:600; opacity:.6; margin-left:2px; }\n.details { display:flex; gap:16px; align-items:flex-start; }\n.col { display:flex; flex-direction:column; gap:7px; align-items:center; text-align:center; }\n.det { display:flex; align-items:center; gap:6px; font-size:1.25rem; font-weight:600;\n       white-space:nowrap; }\n.det.mouille { color:#4fc3f7; }\n.lbl { font-size:.68rem; font-weight:500; opacity:.5; text-transform:uppercase; letter-spacing:.5px;\n       margin-left:4px; }\n.ic { font-size:1.3rem; }\n.u { font-size:.85rem; opacity:.6; margin-left:1px; }\n@media (max-width:600px) {\n  .meteo { justify-content:center; gap:14px; padding:4px 6px; }\n  .bloc-temp { font-size:2.9rem; }\n  .details { width:100%; justify-content:space-between; gap:16px; }\n  .det { font-size:1.05rem; }\n  .ic { font-size:1.15rem; }\n}\n</style>",
+        "storeOutMessages": true,
+        "passthru": false,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "className": "",
+        "x": 950,
+        "y": 760,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "ui_card_prev",
+        "type": "ui-template",
+        "z": "f_thermo",
+        "group": "grp_prev",
+        "page": "",
+        "ui": "",
+        "name": "Carte Prévisions",
+        "order": 1,
+        "width": "12",
+        "height": "0",
+        "head": "",
+        "format": "<template>\n  <div class=\"prev\" v-if=\"jours.length\">\n    <table>\n      <thead>\n        <tr><th class=\"c-jour\">Jour</th><th class=\"c-ciel\">Ciel</th><th class=\"num c-temps\">Mini / Maxi</th><th class=\"num c-cumul\">Cumul</th></tr>\n      </thead>\n      <tbody>\n        <tr v-for=\"j in jours\" :key=\"j.jour\" :class=\"{ auj: j.auj }\">\n          <td class=\"c-jour\">{{ j.jour }}</td>\n          <td class=\"c-ciel\"><span class=\"ic\">{{ j.icone }}</span><span class=\"txt\">{{ j.ciel }}</span></td>\n          <td class=\"num c-temps\"><span :style=\"{ color: teinte(j.mini) }\">{{ fmt(j.mini) }}°</span><span class=\"sep\">/</span><span :style=\"{ color: teinte(j.maxi) }\">{{ fmt(j.maxi) }}°</span></td>\n          <td class=\"num c-cumul\" :class=\"{ sec: !j.cumul, arrose: j.cumul >= 5 }\">\n            <template v-if=\"j.cumul\">{{ j.cumul }}<span class=\"u\">mm</span></template>\n            <template v-else>—</template>\n          </td>\n        </tr>\n      </tbody>\n    </table>\n  </div>\n  <div class=\"prev attente\" v-else>en attente des prévisions…</div>\n</template>\n<script>\nexport default {\n  data () { return { jours: [] } },\n  methods: {\n    // Toujours une decimale : '24' et '23.4' n'ont pas la meme largeur, '24.0'\n    // et '23.4' si. Avec tabular-nums, les colonnes s'alignent sans artifice.\n    fmt (v) { return (v === null || v === undefined) ? '—' : v.toFixed(1) },\n    // Meme echelle que les cartes de capteurs et la carte meteo.\n    teinte (t) {\n      if (t === null || t === undefined) return '#8a8a8a'\n      if (t <= 0) return '#4fc3f7'\n      if (t < 10) return '#4dd0e1'\n      if (t < 18) return '#81c784'\n      if (t < 25) return '#ffb74d'\n      if (t < 29) return '#ff7043'\n      return '#ef5350'\n    }\n  },\n  watch: { msg: function (m) { if (m && Array.isArray(m.payload)) this.jours = m.payload } }\n}\n</script>\n<style>\n/* Un vrai tableau, pas une grille par ligne : l'alignement des colonnes entre\n   les lignes et l'en-tete est garanti par le modele de mise en page du tableau.\n   overflow-x rend l'excedent atteignable au doigt au lieu de le rogner. */\n.prev { padding:2px 14px; font-family:system-ui,-apple-system,sans-serif; overflow-x:auto; }\n.prev.attente { text-align:center; font-size:.85rem; opacity:.5; padding:14px; }\n.prev table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }\n.prev th, .prev td { padding:7px 0; white-space:nowrap;\n                     border-bottom:1px solid rgba(255,255,255,.05); }\n.prev tbody tr:last-child td { border-bottom:none; }\n.prev th { font-size:.68rem; font-weight:500; opacity:.45; text-transform:uppercase;\n           letter-spacing:.5px; text-align:left; padding-bottom:5px; }\n.prev th.num, .prev td.num { text-align:right; }\n/* Gouttieres portees par th ET td, pour que chaque en-tete tombe pile au-dessus\n   de sa colonne. */\n.prev .c-ciel, .prev .c-temps, .prev .c-cumul { padding-left:16px; }\n.prev th.c-ciel { width:100%; }\n/* Le corps des cellules se declare sur td uniquement : porte sur la classe nue,\n   il l'emporterait en specificite sur .prev th et grossirait l'en-tete. */\n.prev td.c-jour { font-size:1rem; font-weight:600; text-transform:capitalize; }\n.prev td.c-ciel { font-size:1rem; }\n.prev td.c-ciel .ic { font-size:1.3rem; vertical-align:-3px; margin-right:9px; }\n.prev tr.auj { font-weight:700; }\n.prev tr.auj .c-jour::after { content:' \\2022'; opacity:.5; }\n.prev td.c-temps { font-size:1.15rem; font-weight:600; }\n.prev td.c-temps .sep { opacity:.3; margin:0 5px; font-weight:400; }\n.prev td.c-cumul { font-size:1.15rem; font-weight:600; }\n.prev td.c-cumul.sec { opacity:.3; font-weight:400; }\n.prev td.c-cumul.arrose { color:#4fc3f7; }\n.prev td.c-cumul .u { font-size:.8rem; opacity:.6; margin-left:2px; }\n@media (max-width:600px) {\n  .prev { padding:2px 4px; }\n  .prev .c-ciel, .prev .c-temps, .prev .c-cumul { padding-left:10px; }\n}\n</style>",
+        "storeOutMessages": true,
+        "passthru": false,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "className": "",
+        "x": 950,
+        "y": 820,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "css_mobile",
+        "type": "ui-template",
+        "z": "f_thermo",
+        "group": "",
+        "page": "",
+        "ui": "uib",
+        "name": "CSS mobile : gouttieres",
+        "order": 0,
+        "width": 0,
+        "height": 0,
+        "head": "",
+        "format": "/* Sur mobile la largeur est la ressource rare. Le dashboard reserve 12 px de\n   marge de page et 16 px de chaque cote dans les cartes : on resserre pour\n   rendre cette place au contenu. */\n@media (max-width: 600px) {\n  .nrdb-layout--grid.nrdb-ui-page { padding: 8px !important; }\n  .nrdb-ui-group .v-card-text { padding: 0 8px 8px !important; }\n}",
+        "storeOutMessages": false,
+        "passthru": false,
+        "resendOnRefresh": false,
+        "templateScope": "site:style",
+        "className": "",
+        "x": 180,
+        "y": 900,
+        "wires": [
+            []
+        ]
+    }
+]

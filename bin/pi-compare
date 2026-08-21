@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Compare les capteurs entre eux sur des mesures SIMULTANEES.
+# Sert a distinguer un decalage de calibration (offset constant, corrigeable)
+# d'un simple ecart de conditions ou de moment de mesure.
+# Usage : pi-compare [heures]   (defaut : 12)
+set -uo pipefail
+source "$(dirname "$0")/_manifest.sh"
+pi_check
+H="${1:-12}"
+
+ssh "$PI_HOST" "docker exec nodered node -e \"
+const {DatabaseSync}=require('node:sqlite');
+const db=new DatabaseSync('/data/thermo.db');
+const H=$H, FEN=10*60*1000;   // fenetres de 10 min
+const depuis=Date.now()-H*3600*1000;
+
+const capteurs=db.prepare('SELECT DISTINCT capteur FROM mesures WHERE ts>=? ORDER BY capteur').all(depuis).map(r=>r.capteur);
+if (capteurs.length<2) { console.log('Moins de 2 capteurs sur la periode.'); process.exit(0); }
+
+// Une valeur par capteur et par fenetre de 10 min. Un capteur qui n'a pas
+// publie dans la fenetre garde sa derniere valeur connue (elle reste ce qu'il
+// 'affiche'), mais seulement si elle a moins de FRAICHEUR : au-dela on ne sait
+// plus, et la reporter fausserait la comparaison. Sans ce report, on n'aurait
+// presque aucune fenetre commune -- le SNZB-02D ne publie qu'au changement.
+const FRAICHEUR=20*60*1000;
+const mesures={};
+for (const c of capteurs) {
+  mesures[c]=db.prepare('SELECT ts,temp FROM mesures WHERE capteur=? AND ts>=? AND temp IS NOT NULL ORDER BY ts')
+               .all(c, depuis-FRAICHEUR).map(r=>({ts:Number(r.ts), temp:r.temp}));
+}
+const fMin=Math.floor(depuis/FEN), fMax=Math.floor(Date.now()/FEN);
+const parFenetre={};
+for (let f=fMin; f<=fMax; f++) {
+  const fin=(f+1)*FEN;
+  for (const c of capteurs) {
+    let derniere=null;
+    for (const m of mesures[c]) { if (m.ts<=fin) derniere=m; else break; }
+    if (derniere && (fin-derniere.ts)<=FRAICHEUR) {
+      parFenetre[f]=parFenetre[f]||{};
+      parFenetre[f][c]=derniere.temp;
+    }
+  }
+}
+
+console.log('Periode : ' + H + ' h   |   fenetres de 10 min   |   ' + capteurs.length + ' capteurs');
+console.log('');
+for (let i=0;i<capteurs.length;i++) {
+  for (let j=i+1;j<capteurs.length;j++) {
+    const a=capteurs[i], b=capteurs[j];
+    const ecarts=[];
+    for (const f of Object.keys(parFenetre)) {
+      const v=parFenetre[f];
+      if (v[a]!==undefined && v[b]!==undefined) ecarts.push(v[a]-v[b]);
+    }
+    if (!ecarts.length) { console.log((a+' vs '+b).padEnd(30)+'aucune mesure simultanee'); continue; }
+    const moy=ecarts.reduce((s,x)=>s+x,0)/ecarts.length;
+    const et=Math.sqrt(ecarts.reduce((s,x)=>s+(x-moy)**2,0)/ecarts.length);
+    const mn=Math.min(...ecarts), mx=Math.max(...ecarts);
+    const verdict = ecarts.length<6 ? 'trop peu de points'
+                  : et<0.25 ? 'OFFSET STABLE -> calibrable'
+                  : 'ecart variable -> conditions, pas calibration';
+    console.log((a+' vs '+b).padEnd(30)
+      + 'ecart moyen ' + (moy>=0?'+':'') + moy.toFixed(2) + ' C'
+      + '   (min ' + mn.toFixed(1) + ' / max ' + mx.toFixed(1) + ', ecart-type ' + et.toFixed(2) + ')'
+      + '   n=' + ecarts.length);
+    console.log(' '.repeat(30) + '-> ' + verdict);
+  }
+}
+db.close();
+\""
+echo
+echo "Un ecart-type faible (< 0,25 C) = decalage constant : corrigeable dans Z2M avec"
+echo "temperature_calibration sur le capteur concerne. Un ecart-type eleve = les capteurs"
+echo "ne voient pas la meme chose (position, courant d'air, moment de mesure)."

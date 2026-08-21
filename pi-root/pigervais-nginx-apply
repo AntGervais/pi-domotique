@@ -1,0 +1,31 @@
+#!/bin/bash
+# Applique /tmp/pigervais-nginx-staging.conf comme conf nginx du reverse proxy.
+# Chemins EN DUR, aucun argument accepte : pas d'ecriture arbitraire possible.
+# Valide avant de recharger, restaure l'ancienne conf si la nouvelle est invalide.
+set -u
+STAGING=/tmp/pigervais-nginx-staging.conf
+TARGET=/etc/nginx/sites-available/pigervais-proxy.conf
+BACKUPS=/var/backups/pigervais-nginx
+
+[ -f "$STAGING" ] || { echo "pas de fichier en staging ($STAGING)"; exit 1; }
+mkdir -p "$BACKUPS"
+STAMP=$(date +%Y%m%d-%H%M%S)
+BAK="$BACKUPS/pigervais-proxy.conf.$STAMP"
+cp -a "$TARGET" "$BAK" 2>/dev/null
+
+install -o root -g root -m 644 "$STAGING" "$TARGET" || { echo "install a echoue"; exit 1; }
+
+if ! nginx -t 2>/tmp/pigervais-nginx-test.log; then
+  echo "conf nginx INVALIDE - restauration de la precedente :"
+  sed 's/^/    /' /tmp/pigervais-nginx-test.log
+  if [ -f "$BAK" ]; then
+    cp -a "$BAK" "$TARGET"
+    nginx -t >/dev/null 2>&1 && systemctl reload nginx
+    echo "ancienne conf restauree et rechargee"
+  fi
+  exit 1
+fi
+
+systemctl reload nginx || { echo "reload nginx a echoue"; exit 1; }
+rm -f "$STAGING"
+echo "conf nginx validee et rechargee (backup: $BAK)"

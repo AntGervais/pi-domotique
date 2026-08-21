@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# Sauvegarde hors site de ce qui n'est pas reconstructible : l'historique des
+# mesures et les secrets restes sur le Pi. Depose le tout dans sauvegarde/,
+# commite et pousse vers le depot prive GitHub.
+# Previent sur ntfy en cas d'echec, sinon une panne passerait inapercue.
+set -uo pipefail
+source "$(dirname "$0")/_manifest.sh"
+
+# Le canal ntfy n'est pas dans le depot : il vient du trousseau macOS.
+# Surchargeable par PIGERVAIS_NTFY pour tester le chemin d'echec sur un canal
+# jetable, sans envoyer d'alerte sur le telephone.
+NTFY="${PIGERVAIS_NTFY:-$(security find-generic-password -s pigervais-ntfy -a url -w 2>/dev/null)}"
+GARDER=8   # snapshots binaires locaux conserves (8 semaines en hebdomadaire)
+
+echec() {
+  echo "✗ $*" >&2
+  curl -s -m 15 -H "Title: Sauvegarde pigervais en échec" -H "Tags: warning,floppy_disk" \
+       -H "Priority: high" -d "$*" "$NTFY" >/dev/null 2>&1 || true
+  exit 1
+}
+
+cd "$PI_ROOT" || echec "miroir introuvable : $PI_ROOT"
+ssh -o BatchMode=yes -o ConnectTimeout=15 "$PI_HOST" true 2>/dev/null \
+  || echec "Pi injoignable ($PI_HOST) — sauvegarde non effectuée."
+
+mkdir -p sauvegarde/secrets backups
+chmod 700 sauvegarde/secrets
+
+# --- 1. Mesures, en SQL texte ---
+# Git diffe et compresse tres bien le texte, et le dump est trie donc quasi
+# append-only : chaque sauvegarde n'ajoute que les nouvelles lignes a l'historique.
+# En binaire, chaque commit stockerait une copie complete de la base.
+ssh "$PI_HOST" 'docker exec nodered node -e "
+const {DatabaseSync}=require(\"node:sqlite\");
+const db=new DatabaseSync(\"/data/thermo.db\");
+const esc=(v)=> v===null||v===undefined ? \"NULL\" : (typeof v===\"string\" ? \"'\''\"+v.replace(/'\''/g,\"'\'''\''\")+\"'\''\" : String(v));
+console.log(\"-- Mesures des capteurs — sauvegarde pigervais\");
+console.log(\"PRAGMA foreign_keys=OFF;\");
+console.log(\"BEGIN TRANSACTION;\");
+console.log(\"CREATE TABLE IF NOT EXISTS mesures (ts INTEGER NOT NULL, capteur TEXT NOT NULL, temp REAL, hum REAL, batterie INTEGER, PRIMARY KEY (ts, capteur));\");
+for (const r of db.prepare(\"SELECT ts,capteur,temp,hum,batterie FROM mesures ORDER BY ts, capteur\").all())
+  console.log(\"INSERT OR REPLACE INTO mesures VALUES(\"+[r.ts,r.capteur,r.temp,r.hum,r.batterie].map(esc).join(\",\")+\");\");
+console.log(\"CREATE INDEX IF NOT EXISTS idx_capteur_ts ON mesures(capteur, ts);\");
+console.log(\"COMMIT;\");
+db.close();"' > sauvegarde/mesures.sql.tmp || echec "export SQL des mesures échoué"
+
+grep -q '^COMMIT;$' sauvegarde/mesures.sql.tmp || echec "dump SQL incomplet (COMMIT absent) — rien n'a été écrasé"
+mv sauvegarde/mesures.sql.tmp sauvegarde/mesures.sql
+lignes=$(grep -c '^INSERT' sauvegarde/mesures.sql)
+
+# --- 2. Snapshot binaire, local uniquement ---
+# VACUUM INTO donne une copie coherente sans arreter Node-RED : copier le .db
+# a chaud sans ca donnerait une base tronquee (le WAL contient des
+# transactions pas encore integrees au fichier principal).
+STAMP=$(date +%Y%m%d-%H%M%S)
+ssh "$PI_HOST" "rm -f /home/antoine/zigbee/nodered/data/_snapshot.db; docker exec nodered node -e \"
+const {DatabaseSync}=require('node:sqlite');
+const db=new DatabaseSync('/data/thermo.db');
+db.exec(\\\"VACUUM INTO '/data/_snapshot.db'\\\");
+db.close();\"" || echec "snapshot SQLite échoué"
+ssh "$PI_HOST" 'cat /home/antoine/zigbee/nodered/data/_snapshot.db' > "backups/thermo-$STAMP.db" \
+  || echec "copie du snapshot échouée"
+ssh "$PI_HOST" 'rm -f /home/antoine/zigbee/nodered/data/_snapshot.db'
+
+# Rotation des snapshots locaux
+ls -1t backups/thermo-*.db 2>/dev/null | tail -n +$((GARDER+1)) | while read -r vieux; do rm -f "$vieux"; done
+
+# --- 3. Secrets, chiffres ---
+# Chiffrement asymetrique (age) : la cle PUBLIQUE suffit a chiffrer, donc la
+# sauvegarde hebdomadaire tourne sans aucun secret sur la machine. La cle privee
+# ne sert qu'a restaurer (trousseau macOS + fiche papier dans ~/Documents).
+CLE_PUB=$(cat sauvegarde/cle-publique-age.txt 2>/dev/null)
+[ -n "$CLE_PUB" ] || echec "clé publique age introuvable (sauvegarde/cle-publique-age.txt)"
+
+TMP=$(mktemp -d) || echec "mktemp échoué"
+trap 'rm -rf "$TMP"' EXIT
+mkdir -p "$TMP/secrets"
+
+# .config.runtime.json contient le credentialSecret qui dechiffre flows_cred.json :
+# sans lui la sauvegarde des credentials Node-RED serait inutilisable.
+# configuration.yaml y va aussi : elle porte la network_key, donc elle n'est pas
+# versionnee en clair (seule configuration.exemple.yaml l'est).
+manquants=0
+for f in /home/antoine/zigbee/.env \
+         /home/antoine/hue-key.json \
+         /home/antoine/zigbee/nodered/data/flows_cred.json \
+         /home/antoine/zigbee/nodered/data/.config.runtime.json \
+         /home/antoine/zigbee/zigbee2mqtt/data/coordinator_backup.json \
+         /home/antoine/zigbee/zigbee2mqtt/data/configuration.yaml; do
+  if ssh "$PI_HOST" "test -r '$f'"; then
+    ssh "$PI_HOST" "cat '$f'" > "$TMP/secrets/$(basename "$f")" || echec "lecture de $f échouée"
+  else
+    echo "  · absent sur le Pi : $f"; manquants=$((manquants+1))
+  fi
+done
+[ "$manquants" -lt 3 ] || echec "trop de secrets manquants ($manquants) — le Pi répond-il correctement ?"
+
+# On ne rechiffre que si le contenu a change : age produit un fichier different
+# a chaque appel (nonce aleatoire), ce qui creerait un commit inutile chaque semaine.
+EMPREINTE=$(cat "$TMP"/secrets/* 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+if [ "$EMPREINTE" != "$(cat .secrets-empreinte 2>/dev/null)" ]; then
+  tar czf - -C "$TMP" secrets | age -r "$CLE_PUB" > sauvegarde/secrets.age.tmp \
+    || echec "chiffrement age échoué"
+  [ -s sauvegarde/secrets.age.tmp ] || echec "secrets.age vide — rien n'a été écrasé"
+  mv sauvegarde/secrets.age.tmp sauvegarde/secrets.age
+  echo "$EMPREINTE" > .secrets-empreinte
+  echo "  ✓ secrets rechiffrés ($(wc -c < sauvegarde/secrets.age | tr -d ' ') octets)"
+else
+  echo "  · secrets inchangés, pas de rechiffrement"
+fi
+
+# --- 4. Config a jour, puis commit et push ---
+"$PI_ROOT/bin/pi-pull" >/dev/null || echo "  ⚠ pi-pull a échoué, la config poussée peut être en retard"
+
+git add -A
+if git diff --cached --quiet; then
+  echo "✓ rien de neuf depuis la dernière sauvegarde ($lignes mesures)"
+  exit 0
+fi
+
+git \
+    commit -q -m "Sauvegarde du $(date '+%d/%m/%Y %H:%M') — $lignes mesures" \
+  || echec "commit échoué"
+
+if git remote | grep -q .; then
+  git push -q origin HEAD 2>/dev/null || echec "push GitHub échoué — sauvegarde locale OK mais pas hors site."
+  echo "✓ poussé sur $(git remote get-url origin | sed 's#.*/##')"
+fi
+
+# Le depot public est un artefact du miroir : on le regenere dans la foulee,
+# sinon il derive silencieusement de la config reelle.
+if [ -x "$PI_ROOT/bin/pi-publish" ]; then
+  "$PI_ROOT/bin/pi-publish" 2>&1 | sed 's/^/  /' || echo "  ⚠ publication publique échouée (la sauvegarde privée, elle, est faite)"
+fi
+
+echo "✓ sauvegarde terminée : $lignes mesures, $(ls -1 backups/thermo-*.db | wc -l | tr -d ' ') snapshots locaux"

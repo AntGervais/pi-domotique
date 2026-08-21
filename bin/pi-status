@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# État de santé du Pi : matériel, services, conteneurs, endpoints.
+# --court : seulement conteneurs + endpoints (utilisé après un push).
+set -uo pipefail
+source "$(dirname "$0")/_manifest.sh"
+pi_check
+COURT=0; [[ "${1:-}" == "--court" ]] && COURT=1
+
+if [[ $COURT -eq 0 ]]; then
+  echo "══ matériel ══"
+  ssh "$PI_HOST" 'echo -n "  "; uptime | sed "s/^ *//"
+    printf "  %-12s %s\n" "temp:" "$(vcgencmd measure_temp | cut -d= -f2)"
+    t=$(vcgencmd get_throttled | cut -d= -f2)
+    if [[ $t == 0x0 ]]; then printf "  %-12s %s\n" "alim:" "OK ($t)"
+    else printf "  %-12s %s\n" "alim:" "⚠ SOUS-TENSION/THROTTLE ($t)"; fi
+    printf "  %-12s %s\n" "RAM:" "$(free -m | awk "/^Mem:/{print \$3\" Mo utilisés / \"\$7\" dispo\"}")"
+    printf "  %-12s %s\n" "swap:" "$(free -m | awk "/^Swap:/{print \$3\" Mo utilisés\"}")"
+    printf "  %-12s %s\n" "disque:" "$(df -h / | awk "NR==2{print \$3\" / \"\$2\" (\"\$5\")\"}")"'
+  echo
+  echo "══ services système ══"
+  ssh "$PI_HOST" 'for s in nginx pihole-FTL tailscaled log2ram docker; do
+      printf "  %-14s %s\n" "$s" "$(systemctl is-active $s)"; done'
+  echo
+fi
+
+echo "══ conteneurs ══"
+ssh "$PI_HOST" 'docker ps -a --format "{{.Names}}|{{.Status}}"' \
+  | awk -F'|' '{printf "  %-14s %s\n", $1, $2}'
+
+echo
+echo "══ endpoints ══"
+ssh "$PI_HOST" 'for u in /pihole/admin/ /zigbee /nodered/dashboard/home /nodered/temp-chambre-axel /nodered/hue/etat; do
+    c=$(curl -s -o /dev/null -w "%{http_code}" -m 10 "http://127.0.0.1$u")
+    case $c in 200|301|302|401) m="✓";; *) m="✗";; esac
+    printf "  %s %-34s %s\n" "$m" "$u" "$c"
+  done'
+
+if [[ $COURT -eq 0 ]]; then
+  echo
+  echo "══ mesures live ══"
+  ssh "$PI_HOST" 'echo -n "  thermo : "; curl -s -m 10 http://127.0.0.1/nodered/temp-chambre-axel
+    echo; echo -n "  hue    : "; curl -s -m 12 http://127.0.0.1/nodered/hue/etat; echo'
+fi

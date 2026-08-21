@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# Pousse le miroir local vers le Pi et recharge les services concernés.
+# Par défaut : montre le diff et demande confirmation. --yes pour sauter la confirmation.
+set -uo pipefail
+source "$(dirname "$0")/_manifest.sh"
+pi_check
+cd "$PI_ROOT"
+
+AUTO=0; [[ "${1:-}" == "--yes" || "${1:-}" == "-y" ]] && AUTO=1
+
+# 1. Repérer ce qui a changé
+changed=(); services=()
+for e in "${MAP[@]}"; do
+  l=$(m_local "$e"); r=$(m_remote "$e")
+  [[ -f "$l" ]] || continue
+  tmp=$(mktemp)
+  ssh "$PI_HOST" "cat '$r'" > "$tmp" 2>/dev/null || : # absent sur le Pi = à créer
+  if ! cmp -s "$tmp" "$l"; then
+    changed+=("$e")
+    echo "──── $l"
+    diff -u --label "Pi (actuel)" "$tmp" --label "local (à pousser)" "$l" | sed 's/^/  /'
+    services+=("$(m_service "$e")")
+  fi
+  rm -f "$tmp"
+done
+
+if [[ ${#changed[@]} -eq 0 ]]; then echo "✓ rien à pousser, le Pi est déjà à jour"; exit 0; fi
+
+# 2. Services à recharger (dédupliqués ; 'compose up -d' couvre les conteneurs)
+uniq_services=$(printf '%s\n' "${services[@]}" | sort -u | grep -v '^none$' || true)
+if grep -qx compose <<< "$uniq_services"; then
+  uniq_services=$(printf '%s\n' "$uniq_services" | grep -v -E '^(mosquitto|zigbee2mqtt|nodered)$' || true)
+fi
+
+echo
+echo "${#changed[@]} fichier(s) à pousser. Rechargement prévu : ${uniq_services:-aucun}"
+if [[ $AUTO -eq 0 ]]; then
+  read -r -p "Continuer ? [o/N] " ok
+  [[ "$ok" =~ ^[oOyY]$ ]] || { echo "annulé"; exit 1; }
+fi
+
+# 3. Pousser (avec backup côté Pi de ce qu'on écrase)
+STAMP=$(date +%Y%m%d-%H%M%S)
+BK="/home/antoine/.pigervais-backups/$STAMP"
+nginx_pending=0
+for e in "${changed[@]}"; do
+  l=$(m_local "$e"); r=$(m_remote "$e")
+  if [[ "$(m_service "$e")" == nginx ]]; then
+    ssh "$PI_HOST" "cat > /tmp/pigervais-nginx-staging.conf" < "$l" || die "envoi staging nginx échoué"
+    nginx_pending=1
+  else
+    ssh "$PI_HOST" "mkdir -p '$BK'; cp -a '$r' '$BK/' 2>/dev/null; cat > '$r'" < "$l" \
+      || die "écriture échouée : $r"
+    echo "  → $r"
+  fi
+done
+[[ $nginx_pending -eq 0 ]] || echo "  → conf nginx en staging sur le Pi"
+
+# 4. Recharger
+for s in $uniq_services; do
+  case "$s" in
+    compose)     echo "  ⟳ docker compose up -d"; ssh "$PI_HOST" 'cd /home/antoine/zigbee && docker compose up -d' 2>&1 | sed 's/^/    /' ;;
+    mosquitto|zigbee2mqtt|nodered)
+                 echo "  ⟳ restart $s";            ssh "$PI_HOST" "cd /home/antoine/zigbee && docker compose restart $s" 2>&1 | sed 's/^/    /' ;;
+    nginx)
+      if ssh "$PI_HOST" 'sudo -n /usr/local/sbin/pigervais-nginx-apply' 2>&1 | sed 's/^/    /'; then :; else
+        echo "    ✗ Le wrapper root n'est pas installé (ou refuse)."
+        echo "      Applique la conf à la main sur le Pi :"
+        echo "      ssh pigervais 'sudo install -o root -g root -m 644 /tmp/pigervais-nginx-staging.conf \\"
+        echo "        /etc/nginx/sites-available/pigervais-proxy.conf && sudo nginx -t && sudo systemctl reload nginx'"
+      fi ;;
+  esac
+done
+
+# 5. Attendre que Node-RED soit vraiment reparti avant de verifier : il met
+#    ~30 s a repondre sur un Pi 3B, sinon on affiche des 502 trompeurs.
+if grep -qE '^(compose|nodered)$' <<< "$uniq_services"; then
+  printf "  ⏳ attente du redémarrage de Node-RED"
+  ssh "$PI_HOST" 'for i in $(seq 1 36); do
+      c=$(curl -s -o /dev/null -w "%{http_code}" -m 5 http://127.0.0.1/nodered/dashboard/home)
+      [ "$c" = "200" ] && exit 0
+      printf "."
+      sleep 5
+    done
+    exit 1' && echo " prêt" || echo " ⚠ toujours pas prêt après 3 min"
+fi
+
+# 6. Vérifier que tout répond encore
+echo
+echo "── vérification post-push ──"
+"$PI_ROOT/bin/pi-status" --court
+echo
+echo "Backup de ce qui a été écrasé (hors nginx) : $BK"

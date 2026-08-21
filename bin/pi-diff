@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Compare le miroir local à ce qui tourne sur le Pi. Lecture seule des deux côtés.
+set -uo pipefail
+source "$(dirname "$0")/_manifest.sh"
+pi_check
+cd "$PI_ROOT"
+
+n_diff=0
+for e in "${MAP[@]}"; do
+  l=$(m_local "$e"); r=$(m_remote "$e")
+  [[ -f "$l" ]] || { echo "  ? $l — absent en local (lance pi-pull)"; continue; }
+  tmp=$(mktemp)
+  if ! ssh "$PI_HOST" "cat '$r'" > "$tmp" 2>/dev/null; then
+    echo "  ✗ $l — illisible sur le Pi"; rm -f "$tmp"; continue
+  fi
+  if ! cmp -s "$tmp" "$l"; then
+    echo "──── $l  (Pi → local)"
+    diff -u --label "Pi:$r" "$tmp" --label "local:$l" "$l" | sed 's/^/  /'
+    ((n_diff++))
+  fi
+  rm -f "$tmp"
+done
+[[ $n_diff -eq 0 ]] && echo "✓ miroir identique au Pi" || echo "→ $n_diff fichier(s) divergent(s)"

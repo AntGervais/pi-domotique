@@ -1,0 +1,41 @@
+# Exemple de configuration Zigbee2MQTT.
+# Copier en configuration.yaml et adapter. network_key: GENERATE fait
+# generer une cle propre au premier demarrage.
+homeassistant:
+  enabled: false
+mqtt:
+  base_topic: zigbee2mqtt
+  server: mqtt://mosquitto:1883
+serial:
+  port: /dev/ttyUSB0
+  adapter: ember
+frontend:
+  enabled: true
+  port: 8080
+  base_url: /zigbee
+availability:
+  enabled: true
+  passive:
+    # Capteurs sur pile : z2m les declare hors ligne apres ce silence (min).
+    # Le defaut de 1500 (25 h) est trop laxiste ; le plus lent de nos capteurs
+    # emet toutes les ~9 min, donc 90 min de silence = panne certaine.
+    timeout: 90
+advanced:
+  network_key: GENERATE
+  channel: 20
+  log_level: info
+  last_seen: ISO_8601
+version: 5
+devices:
+  '0xf4b3b1fffe55fb8b':
+    friendly_name: Chambre Axel
+    retain: true
+  '0xa4c138062d11ffff':
+    friendly_name: Extérieur
+    retain: true
+  '0xa4c13818e2b7ffff':
+    friendly_name: Bureau
+    retain: true
+  '0xa4c13818a24affff':
+    friendly_name: Cuisine
+    retain: true
