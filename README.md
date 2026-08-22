@@ -109,7 +109,7 @@ the flow. Two alerts are wired:
 
 | Trigger | Message |
 |---|---|
-| Bedroom above 30 C | `Chambre Axel: 30.4 C (seuil 30 C depasse)`, high priority |
+| Bedroom above 30 C | `Chambre: 30.4 C (seuil 30 C depasse)`, high priority |
 | Outside cooler than inside | window advice, on request |
 
 The threshold alert uses **hysteresis**, and it is the whole trick. A naive `temp > 30`

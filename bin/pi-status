@@ -29,7 +29,7 @@ ssh "$PI_HOST" 'docker ps -a --format "{{.Names}}|{{.Status}}"' \
 
 echo
 echo "══ endpoints ══"
-ssh "$PI_HOST" 'for u in /pihole/admin/ /zigbee /nodered/dashboard/home /nodered/temp-chambre-axel /nodered/hue/etat; do
+ssh "$PI_HOST" 'for u in /pihole/admin/ /zigbee /nodered/dashboard/home /nodered/temp-chambre /nodered/hue/etat; do
     c=$(curl -s -o /dev/null -w "%{http_code}" -m 10 "http://127.0.0.1$u")
     case $c in 200|301|302|401) m="✓";; *) m="✗";; esac
     printf "  %s %-34s %s\n" "$m" "$u" "$c"
@@ -38,6 +38,6 @@ ssh "$PI_HOST" 'for u in /pihole/admin/ /zigbee /nodered/dashboard/home /nodered
 if [[ $COURT -eq 0 ]]; then
   echo
   echo "══ mesures live ══"
-  ssh "$PI_HOST" 'echo -n "  thermo : "; curl -s -m 10 http://127.0.0.1/nodered/temp-chambre-axel
+  ssh "$PI_HOST" 'echo -n "  thermo : "; curl -s -m 10 http://127.0.0.1/nodered/temp-chambre
     echo; echo -n "  hue    : "; curl -s -m 12 http://127.0.0.1/nodered/hue/etat; echo'
 fi

@@ -28,7 +28,7 @@ advanced:
 version: 5
 devices:
   '0xf4b3b1fffe55fb8b':
-    friendly_name: Chambre Axel
+    friendly_name: Chambre
     retain: true
   '0xa4c138062d11ffff':
     friendly_name: Extérieur
