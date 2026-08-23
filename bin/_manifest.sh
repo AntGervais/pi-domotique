@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Carte du miroir : chemin_local | chemin_sur_le_Pi | service à recharger
-# Services connus : compose, mosquitto, zigbee2mqtt, nodered, nginx, none
+# Services connus : compose, mosquitto, zigbee2mqtt, nodered, nginx, cloudflared, none
 PI_HOST="${PI_HOST:-pigervais}"
 PI_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -12,6 +12,7 @@ MAP=(
   "nodered/flows.json|/home/antoine/zigbee/nodered/data/flows.json|nodered"
   "nodered/package.json|/home/antoine/zigbee/nodered/data/package.json|nodered"
   "nginx/pigervais-proxy.conf|/etc/nginx/sites-available/pigervais-proxy.conf|nginx"
+  "cloudflared/config.yml|/etc/cloudflared/config.yml|cloudflared"
   "scripts/hue-flow-complet.py|/home/antoine/hue-flow-complet.py|none"
   "scripts/hue-flow-etat.py|/home/antoine/hue-flow-etat.py|none"
 )

@@ -43,11 +43,17 @@ fi
 STAMP=$(date +%Y%m%d-%H%M%S)
 BK="/home/antoine/.pigervais-backups/$STAMP"
 nginx_pending=0
+cloudflared_pending=0
 for e in "${changed[@]}"; do
   l=$(m_local "$e"); r=$(m_remote "$e")
   if [[ "$(m_service "$e")" == nginx ]]; then
     ssh "$PI_HOST" "cat > /tmp/pigervais-nginx-staging.conf" < "$l" || die "envoi staging nginx échoué"
     nginx_pending=1
+  elif [[ "$(m_service "$e")" == cloudflared ]]; then
+    # Meme raison que nginx : la cible est sous /etc, donc inaccessible sans
+    # sudo. On depose en staging, le wrapper root fait le reste.
+    ssh "$PI_HOST" "cat > /tmp/pigervais-cloudflared-staging.yml" < "$l" || die "envoi staging cloudflared échoué"
+    cloudflared_pending=1
   else
     ssh "$PI_HOST" "mkdir -p '$BK'; cp -a '$r' '$BK/' 2>/dev/null; cat > '$r'" < "$l" \
       || die "écriture échouée : $r"
@@ -55,6 +61,7 @@ for e in "${changed[@]}"; do
   fi
 done
 [[ $nginx_pending -eq 0 ]] || echo "  → conf nginx en staging sur le Pi"
+[[ $cloudflared_pending -eq 0 ]] || echo "  → conf cloudflared en staging sur le Pi"
 
 # 4. Recharger
 for s in $uniq_services; do
@@ -64,10 +71,16 @@ for s in $uniq_services; do
                  echo "  ⟳ restart $s";            ssh "$PI_HOST" "cd /home/antoine/zigbee && docker compose restart $s" 2>&1 | sed 's/^/    /' ;;
     nginx)
       if ssh "$PI_HOST" 'sudo -n /usr/local/sbin/pigervais-nginx-apply' 2>&1 | sed 's/^/    /'; then :; else
-        echo "    ✗ Le wrapper root n'est pas installé (ou refuse)."
-        echo "      Applique la conf à la main sur le Pi :"
+        echo "    ✗ Conf refusée, ou wrapper root absent — lire le message ci-dessus."
+        echo "      Si le wrapper est absent, applique la conf à la main sur le Pi :"
         echo "      ssh pigervais 'sudo install -o root -g root -m 644 /tmp/pigervais-nginx-staging.conf \\"
         echo "        /etc/nginx/sites-available/pigervais-proxy.conf && sudo nginx -t && sudo systemctl reload nginx'"
+      fi ;;
+    cloudflared)
+      if ssh "$PI_HOST" 'sudo -n /usr/local/sbin/pigervais-cloudflared-apply' 2>&1 | sed 's/^/    /'; then :; else
+        echo "    ✗ Conf refusée, ou wrapper root absent — lire le message ci-dessus."
+        echo "      Si la conf est invalide : corriger cloudflared/config.yml et repousser."
+        echo "      Ne PAS installer le staging à la main, ça contournerait la validation."
       fi ;;
   esac
 done
