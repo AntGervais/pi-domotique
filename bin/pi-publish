@@ -11,19 +11,37 @@ PUBLIC="${PIGERVAIS_PUBLIC:-$HOME/pigervais-public}"
 cd "$PI_ROOT" || { echo "✗ miroir introuvable" >&2; exit 1; }
 
 # --- Liste blanche : rien d'autre ne sort d'ici ---
+#
+# Format : source_dans_le_miroir|destination_dans_le_depot_public
+#
+# La destination reproduit l'arborescence D'EXECUTION, pas celle du miroir.
+# Le miroir est mis a plat pour le confort d'edition, mais docker-compose.yml
+# monte des volumes relatifs a son propre dossier (./zigbee2mqtt/data,
+# ./nodered/data, ./mosquitto/config) : publier la mise a plat donnait un depot
+# lisible mais NON executable — un clone suivi de `docker compose up -d`
+# creait trois volumes vides, sans flows ni dashboard ni capteurs.
+# Toute conf qui vit sous /home/antoine/zigbee/ sur le Pi doit donc sortir
+# sous zigbee/ ici, au meme emplacement relatif.
 FICHIERS=(
-  zigbee/docker-compose.yml
-  zigbee/mosquitto.conf
-  zigbee2mqtt/configuration.exemple.yaml
-  nodered/flows.json
-  nodered/settings.js
-  nodered/package.json
-  nginx/pigervais-proxy.conf
-  pi-root/pigervais-nginx-apply
-  scripts/hue-flow-complet.py
-  scripts/hue-flow-etat.py
-  bin/_manifest.sh bin/pi-pull bin/pi-push bin/pi-diff
-  bin/pi-status bin/pi-backup bin/pi-compare bin/pi-publish
+  "zigbee/docker-compose.yml|zigbee/docker-compose.yml"
+  "zigbee/mosquitto.conf|zigbee/mosquitto/config/mosquitto.conf"
+  "zigbee2mqtt/configuration.exemple.yaml|zigbee/zigbee2mqtt/data/configuration.exemple.yaml"
+  "nodered/flows.json|zigbee/nodered/data/flows.json"
+  "nodered/settings.js|zigbee/nodered/data/settings.js"
+  "nodered/package.json|zigbee/nodered/data/package.json"
+  # Ces deux-la vont sous /etc sur le Pi : ils restent a part, en documentation.
+  "nginx/pigervais-proxy.conf|nginx/pigervais-proxy.conf"
+  "pi-root/pigervais-nginx-apply|pi-root/pigervais-nginx-apply"
+  "scripts/hue-flow-complet.py|scripts/hue-flow-complet.py"
+  "scripts/hue-flow-etat.py|scripts/hue-flow-etat.py"
+  "bin/_manifest.sh|bin/_manifest.sh"
+  "bin/pi-pull|bin/pi-pull"
+  "bin/pi-push|bin/pi-push"
+  "bin/pi-diff|bin/pi-diff"
+  "bin/pi-status|bin/pi-status"
+  "bin/pi-backup|bin/pi-backup"
+  "bin/pi-compare|bin/pi-compare"
+  "bin/pi-publish|bin/pi-publish"
 )
 
 mkdir -p "$PUBLIC"
@@ -33,10 +51,11 @@ mkdir -p "$PUBLIC"
 # disparaitre du public, pas y survivre indefiniment.
 find "$PUBLIC" -mindepth 1 -maxdepth 1 -not -name '.git' -exec rm -rf {} +
 
-for f in "${FICHIERS[@]}"; do
-  [ -f "$f" ] || { echo "  · absent, ignoré : $f"; continue; }
-  mkdir -p "$PUBLIC/$(dirname "$f")"
-  cp -p "$f" "$PUBLIC/$f"
+for paire in "${FICHIERS[@]}"; do
+  src="${paire%%|*}"; dst="${paire##*|}"
+  [ -f "$src" ] || { echo "  · absent, ignoré : $src"; continue; }
+  mkdir -p "$PUBLIC/$(dirname "$dst")"
+  cp -p "$src" "$PUBLIC/$dst"
 done
 [ -f README-public.md ] && cp README-public.md "$PUBLIC/README.md"
 [ -f LICENSE ] && cp LICENSE "$PUBLIC/LICENSE"

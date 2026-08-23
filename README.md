@@ -206,12 +206,23 @@ it, or `pi-push` will overwrite work done in the browser.
 
 ## Getting started
 
+The `zigbee/` directory is laid out exactly as Docker expects it, so the stack runs
+straight from a clone. Everything below happens inside `zigbee/` — the Compose file lives
+there and its volume paths are relative to it.
+
 ```sh
-git clone <this-repo> && cd pi-domotique
-cp zigbee2mqtt/configuration.exemple.yaml zigbee2mqtt/configuration.yaml
+git clone <this-repo> && cd pi-domotique/zigbee
+cp zigbee2mqtt/data/configuration.exemple.yaml zigbee2mqtt/data/configuration.yaml
 ```
 
-Create `zigbee/.env`:
+Point `serial.port` in that file at your own coordinator. The stable path is under
+`/dev/serial/by-id/`, never `/dev/ttyUSB0`, which moves between boots:
+
+```sh
+ls -l /dev/serial/by-id/
+```
+
+Create `.env` next to `docker-compose.yml`:
 
 ```sh
 HUE_BRIDGE=<hue-bridge-ip>
@@ -219,8 +230,22 @@ HUE_KEY=<key-obtained-by-pressing-the-bridge-button>
 NTFY_URL=https://ntfy.sh/<your-private-channel>
 ```
 
-Then `docker compose up -d`. `network_key: GENERATE` makes Zigbee2MQTT generate its own key
-on first boot.
+Then:
+
+```sh
+docker compose up -d
+docker exec -w /data nodered npm install   # dashboard package from package.json
+docker compose restart nodered
+```
+
+`network_key: GENERATE` makes Zigbee2MQTT generate its own key on first boot. The dashboard
+lands on `http://<host>:1880/nodered/dashboard/home`, the Zigbee2MQTT frontend on `:8080`.
+Pair your own sensors from that frontend, then rename them to match the flow: it keys cards
+and history on the sensor name, and the spoken endpoints expect `Chambre`.
+
+The published `flows.json` is the real one, so it references sensor names and a Hue bridge
+that are not yours. Expect the dashboard cards to stay empty until your own devices publish
+under those names.
 
 Adapt `bin/_manifest.sh` (SSH host, paths) and the nginx config to your setup.
 
