@@ -53,9 +53,11 @@ instead of waiting for the next report.
 
 ## 📨 Mosquitto
 
-Deliberately minimal, and one caveat comes with that: **persistence is not enabled**.
-Restarting the broker drops retained messages, so sensor values vanish from the dashboard
-and from Siri until the next report. Don't restart it casually.
+Deliberately minimal: an anonymous listener on 1883 for the LAN, plus on-disk persistence
+(`persistence true`, `persistence_location /mosquitto/data/`). That second line is the one
+that matters. The dashboard and the voice endpoints read the last *retained* value when they
+connect, so without persistence a broker restart would blank both until the next sensor
+report — and an SNZB-02D only reports on threshold crossings, which can be an hour away.
 
 ## 🔀 Node-RED
 
