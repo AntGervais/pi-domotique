@@ -48,6 +48,24 @@ grep -q '^COMMIT;$' sauvegarde/mesures.sql.tmp || echec "dump SQL incomplet (COM
 mv sauvegarde/mesures.sql.tmp sauvegarde/mesures.sql
 lignes=$(grep -c '^INSERT' sauvegarde/mesures.sql)
 
+# --- 1bis. Linky, en SQL texte (meme raisonnement que les mesures) ---
+ssh "$PI_HOST" 'docker exec nodered node -e "
+const {DatabaseSync}=require(\"node:sqlite\");
+const db=new DatabaseSync(\"/data/thermo.db\");
+const esc=(v)=> v===null||v===undefined ? \"NULL\" : (typeof v===\"string\" ? \"'\''\"+v.replace(/'\''/g,\"'\'''\''\")+\"'\''\" : String(v));
+console.log(\"-- Linky — sauvegarde pigervais\");
+console.log(\"PRAGMA foreign_keys=OFF;\");
+console.log(\"BEGIN TRANSACTION;\");
+console.log(\"CREATE TABLE IF NOT EXISTS linky (ts INTEGER PRIMARY KEY, papp REAL, iinst REAL, ptec TEXT, hchc REAL, hchp REAL);\");
+for (const r of db.prepare(\"SELECT ts,papp,iinst,ptec,hchc,hchp FROM linky ORDER BY ts\").all())
+  console.log(\"INSERT OR REPLACE INTO linky VALUES(\"+[r.ts,r.papp,r.iinst,r.ptec,r.hchc,r.hchp].map(esc).join(\",\")+\");\");
+console.log(\"COMMIT;\");
+db.close();"' > sauvegarde/linky.sql.tmp || echec "export SQL du Linky échoué"
+
+grep -q '^COMMIT;$' sauvegarde/linky.sql.tmp || echec "dump SQL Linky incomplet (COMMIT absent) — rien n'a été écrasé"
+mv sauvegarde/linky.sql.tmp sauvegarde/linky.sql
+lignes_linky=$(grep -c '^INSERT' sauvegarde/linky.sql)
+
 # --- 2. Snapshot binaire, local uniquement ---
 # VACUUM INTO donne une copie coherente sans arreter Node-RED : copier le .db
 # a chaud sans ca donnerait une base tronquee (le WAL contient des
@@ -114,12 +132,12 @@ fi
 
 git add -A
 if git diff --cached --quiet; then
-  echo "✓ rien de neuf depuis la dernière sauvegarde ($lignes mesures)"
+  echo "✓ rien de neuf depuis la dernière sauvegarde ($lignes mesures, $lignes_linky Linky)"
   exit 0
 fi
 
 git \
-    commit -q -m "Sauvegarde du $(date '+%d/%m/%Y %H:%M') — $lignes mesures" \
+    commit -q -m "Sauvegarde du $(date '+%d/%m/%Y %H:%M') — $lignes mesures, $lignes_linky Linky" \
   || echec "commit échoué"
 
 if git remote | grep -q .; then
@@ -133,4 +151,4 @@ if [ -x "$PI_ROOT/bin/pi-publish" ]; then
   "$PI_ROOT/bin/pi-publish" 2>&1 | sed 's/^/  /' || echo "  ⚠ publication publique échouée (la sauvegarde privée, elle, est faite)"
 fi
 
-echo "✓ sauvegarde terminée : $lignes mesures, $(ls -1 backups/thermo-*.db | wc -l | tr -d ' ') snapshots locaux"
+echo "✓ sauvegarde terminée : $lignes mesures, $lignes_linky Linky, $(ls -1 backups/thermo-*.db | wc -l | tr -d ' ') snapshots locaux"
