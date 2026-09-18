@@ -34,6 +34,7 @@ FICHIERS=(
   "pi-root/pigervais-nginx-apply|pi-root/pigervais-nginx-apply"
   "scripts/hue-flow-complet.py|scripts/hue-flow-complet.py"
   "scripts/hue-flow-etat.py|scripts/hue-flow-etat.py"
+  "scripts/pi-healthcheck.sh|scripts/pi-healthcheck.sh"
   "bin/_manifest.sh|bin/_manifest.sh"
   "bin/pi-pull|bin/pi-pull"
   "bin/pi-push|bin/pi-push"

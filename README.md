@@ -11,7 +11,7 @@ available**.
 | Service | Type | Role | RAM |
 |---|---|---|---|
 | 🛡️ **Pi-hole v6** | systemd | DNS filtering, 24 lists, ~711k domains | 22 MB |
-| 📡 **Zigbee2MQTT** | Docker | Zigbee coordinator → MQTT, 4 sensors | 113 MB |
+| 📡 **Zigbee2MQTT** | Docker | Zigbee coordinator → MQTT, 5 sensors | 113 MB |
 | 📨 **Mosquitto** | Docker | MQTT broker between Zigbee2MQTT and Node-RED | 1 MB |
 | 🔀 **Node-RED** | Docker | History, dashboard, alerts, voice endpoints, weather | 131 MB |
 | 🌐 **nginx** | systemd | Reverse proxy, every service behind one port | 20 MB |
@@ -38,8 +38,10 @@ Worth knowing: bare `/pihole/` returns 403, since there is no index. The real en
 ## 📡 Zigbee2MQTT
 
 Sonoff ZBDongle-E on `/dev/ttyUSB0`, `ember` adapter, channel 20. Four Sonoff sensors
-(SNZB-02D, SNZB-02DR2, SNZB-02WD), all battery-powered end devices talking directly to the
-coordinator. There is no router in the mesh.
+(SNZB-02D, SNZB-02DR2, SNZB-02WD), all battery-powered end devices, plus a **Lixee
+ZLinky_TIC** clipped onto the utility meter's TIC port — the one mains-powered device on
+the network, and Zigbee classifies it as a `Router`, so it doubles as the mesh's only relay
+for the battery sensors.
 
 `last_seen: ISO_8601` is enabled, and it matters more than it looks: see the Node-RED
 notes below.
@@ -124,8 +126,9 @@ if (temp > 30 && !was) { flow.set('over30', true);  /* notify */ }
 else if (temp <= 30 && was) { flow.set('over30', false); /* notify back to normal */ }
 ```
 
-`pi-backup` uses the same channel to report its own failures, reading the topic from the
-macOS keychain rather than a file.
+`pi-backup` and the daily health check (`pi-healthcheck.sh`, below) use the same channel to
+report their own failures — the former reads the topic from the macOS keychain, the latter
+from `.env` on the Pi, since it has no keychain to reach for.
 
 ### Weather
 
@@ -133,6 +136,27 @@ macOS keychain rather than a file.
 it is backed by Météo-France's AROME model. One HTTP request every 15 minutes feeds two
 cards, current conditions and a 7-day forecast, from a single WMO 4677 code table. The API
 also serves 15-minute resolution and up to 16 days.
+
+### Electricity metering
+
+A **Lixee ZLinky_TIC** clips onto the utility meter's TIC port and exposes it as an
+ordinary Zigbee device, no cabling into the meter itself. It publishes instantaneous
+power, current, tariff period and two cumulative indexes (off-peak / peak), the same way
+a temperature sensor publishes degrees.
+
+Reusing the SQLite approach above needs one adjustment: a Node-RED `function` node's
+`context` is private to that node, so the meter gets its **own `DatabaseSync` connection**
+to the same file rather than sharing the temperature nodes' handle — SQLite's WAL mode
+lets two connections write to one file without treating each other as contention.
+
+Daily and monthly consumption aren't measured directly; the two indexes only ever go up,
+so a day's usage is the **difference between the last reading of that day and the last
+reading of the day before**. Day boundaries need the container's real timezone
+(`TZ=Europe/Paris`), or a day computed in UTC drifts by however many hours the offset is.
+
+The dashboard card prices the current day live, at hardcoded €/kWh constants for the
+off-peak/peak tariff — regulated rates that change roughly twice a year and have no API,
+so they're a comment to update by hand, not a fetch.
 
 ### Philips Hue
 
@@ -205,6 +229,25 @@ Two implementation notes:
 
 `nodered/flows.json` is also written by the web editor. Always `pi-pull` before touching
 it, or `pi-push` will overwrite work done in the browser.
+
+## Automation
+
+Two scheduled jobs, on two different machines, because each needs something the other
+side doesn't have:
+
+- **`pi-backup`, weekly, from the workstation** (`launchd`, not cron — macOS's own
+  scheduler survives sleep/wake, where cron would simply miss the slot). It needs the
+  keychain for the ntfy topic and a git remote to push to, neither of which the Pi has.
+- **`pi-healthcheck.sh`, daily, on the Pi itself** (plain `cron`, root not required —
+  a user crontab is enough). It checks the containers are actually `running`, not just
+  present, the Zigbee bridge is online, no sensor has gone quiet for 3 hours, and
+  `vcgencmd`'s under-voltage bit is still set a few seconds later rather than a one-off
+  spike. Silent when everything is fine; one ntfy alert, listing everything wrong at once,
+  otherwise.
+
+The second job exists because of a real incident: the Zigbee dongle's serial port died,
+the container exited, Docker's restart policy gave up after three attempts, and nothing
+was watching — two weeks of silence before anyone noticed the sensors had stopped.
 
 ## Getting started
 

@@ -15,6 +15,7 @@ MAP=(
   "cloudflared/config.yml|/etc/cloudflared/config.yml|cloudflared"
   "scripts/hue-flow-complet.py|/home/antoine/hue-flow-complet.py|none"
   "scripts/hue-flow-etat.py|/home/antoine/hue-flow-etat.py|none"
+  "scripts/pi-healthcheck.sh|/home/antoine/pi-healthcheck.sh|none"
 )
 
 m_local()   { echo "${1%%|*}"; }
