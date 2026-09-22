@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# Bilan de sante quotidien de la stack pigervais. Silence si tout va bien,
-# alerte ntfy sinon — sinon une panne comme celle du 3 septembre (conteneur
-# zigbee2mqtt plante, personne prevenu, 2 semaines sans capteurs) repasse
-# inapercue. Prevu pour tourner sur le Pi lui-meme (cron), pas le Mac : le
-# NTFY_URL est deja dans ~/zigbee/.env, aucun secret supplementaire requis.
+# Bilan de sante de la stack pigervais. Silence si tout va bien, alerte ntfy
+# sinon — sinon une panne comme celle du 3 septembre (conteneur zigbee2mqtt
+# plante, personne prevenu, 2 semaines sans capteurs) repasse inapercue.
+# Prevu pour tourner sur le Pi lui-meme (cron), pas le Mac : le NTFY_URL est
+# deja dans ~/zigbee/.env, aucun secret supplementaire requis.
+#
+# Auto-guerison (ajoute le 22 septembre 2026, 2e occurrence du meme crash
+# USB) : un conteneur arrete est relance tout seul plutot que juste signale,
+# pour ne pas dependre d'une intervention manuelle entre deux passages du
+# cron. L'alerte precise si ca a marche ou pas.
 set -uo pipefail
 
 ENV_FILE=/home/antoine/zigbee/.env
@@ -24,9 +29,25 @@ duree_lisible() {
 }
 
 # 1. Conteneurs Docker : tous doivent etre "running" (pas juste "existants").
+# Un conteneur arrete (pas "absent", qui indiquerait un vrai probleme de
+# config) est relance automatiquement plutot que juste signale.
 for c in mosquitto zigbee2mqtt nodered; do
   etat=$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo "absent")
-  [ "$etat" = "running" ] || PROBLEMES+=("conteneur $c : $etat")
+  if [ "$etat" = "running" ]; then
+    continue
+  fi
+  if [ "$etat" = "exited" ]; then
+    (cd /home/antoine/zigbee && docker compose up -d "$c") >/dev/null 2>&1
+    sleep 10
+    etat2=$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo "absent")
+    if [ "$etat2" = "running" ]; then
+      PROBLEMES+=("conteneur $c : etait $etat, relance automatiquement avec succes")
+      continue
+    fi
+    PROBLEMES+=("conteneur $c : etait $etat, relance automatique ECHOUEE (etat: $etat2)")
+  else
+    PROBLEMES+=("conteneur $c : $etat")
+  fi
 done
 
 # 2. Pont Zigbee2MQTT en ligne (retained sur le broker).
