@@ -9,10 +9,16 @@
 # USB) : un conteneur arrete est relance tout seul plutot que juste signale,
 # pour ne pas dependre d'une intervention manuelle entre deux passages du
 # cron. L'alerte precise si ca a marche ou pas.
+#
+# Anti-spam (24 septembre 2026) : passe a l'heure, ce script sans garde-fou
+# renvoyait la MEME alerte a chaque passage tant que le probleme n'etait pas
+# resolu. Notification uniquement au CHANGEMENT d'etat (meme principe que
+# l'alerte 30 C / fenetre dans Node-RED), pas a chaque execution.
 set -uo pipefail
 
 ENV_FILE=/home/antoine/zigbee/.env
 [ -r "$ENV_FILE" ] && source "$ENV_FILE"
+ETAT_FILE=/home/antoine/.pigervais-healthcheck-signature
 
 PROBLEMES=()
 
@@ -99,11 +105,24 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 http://127.0.0.1/nodered/das
 if [ "${#PROBLEMES[@]}" -gt 0 ]; then
   texte=$(printf '%s\n' "${PROBLEMES[@]}")
   echo "$texte"
-  if [ -n "${NTFY_URL:-}" ]; then
-    curl -s -m 15 -H "Title: pigervais — bilan du matin" -H "Tags: warning" -H "Priority: high" \
+
+  # Signature stable du probleme (chiffres retires : une duree "muet depuis
+  # 3h" qui devient "4h" au passage suivant reste le MEME probleme, pas un
+  # nouveau).
+  signature=$(printf '%s\n' "${PROBLEMES[@]}" | tr -d '0-9' | sort)
+  derniere_signature=$(cat "$ETAT_FILE" 2>/dev/null || echo "")
+  if [ "$signature" != "$derniere_signature" ] && [ -n "${NTFY_URL:-}" ]; then
+    curl -s -m 15 -H "Title: pigervais — problème détecté" -H "Tags: warning" -H "Priority: high" \
          -d "$texte" "$NTFY_URL" >/dev/null 2>&1
   fi
+  echo "$signature" > "$ETAT_FILE"
   exit 1
 fi
 
+# Retour a la normale apres un probleme : une seule notification, discrete.
+if [ -s "$ETAT_FILE" ] && [ -n "${NTFY_URL:-}" ]; then
+  curl -s -m 15 -H "Title: pigervais — retour à la normale" -H "Tags: white_check_mark" \
+       -d "Tous les indicateurs sont de nouveau au vert." "$NTFY_URL" >/dev/null 2>&1
+fi
+: > "$ETAT_FILE"
 echo "✓ tout va bien"
