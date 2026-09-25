@@ -119,10 +119,8 @@ if [ "${#PROBLEMES[@]}" -gt 0 ]; then
   exit 1
 fi
 
-# Retour a la normale apres un probleme : une seule notification, discrete.
-if [ -s "$ETAT_FILE" ] && [ -n "${NTFY_URL:-}" ]; then
-  curl -s -m 15 -H "Title: pigervais — retour à la normale" -H "Tags: white_check_mark" \
-       -d "Tous les indicateurs sont de nouveau au vert." "$NTFY_URL" >/dev/null 2>&1
-fi
+# Retour a la normale : pas de notification (demande explicite de
+# l'utilisateur le 25 septembre 2026, "je veux juste une notif quand c'est
+# casse"). Le silence EST le signal que tout va bien.
 : > "$ETAT_FILE"
 echo "✓ tout va bien"
