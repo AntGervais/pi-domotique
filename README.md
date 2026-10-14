@@ -199,7 +199,8 @@ and backup, that active file gained one path-specific route:
 `^/api/keep(/.*)?$` → `http://127.0.0.1:8765`. It precedes the existing general host route,
 whose destination remains `http://127.0.0.1:8082`; the final catch-all still returns HTTP 404.
 The Worker authenticates with a dedicated Cloudflare Access service token scoped to the Keep
-path and its subpaths, plus the bridge bearer token. The existing dashboard Access policy is
+path and its subpaths, plus the bridge bearer token. A separate Access application now
+authorizes the same service token on the exact read-only thermometer endpoint. The existing dashboard Access policy is
 preserved. No router port was opened,
 and the Node-RED, Zigbee2MQTT and Mosquitto services were left in place.
 
@@ -354,3 +355,27 @@ asymmetric, so the scheduled backup runs without any private key sitting on the 
 Considered, rejected: roughly 400-500 MB in a container, which does not fit alongside the
 rest on a 3B. Node-RED covers the need (charts, alerts, voice endpoints) for a fraction
 of the memory. On a Pi 4 or 5 the trade-off would go the other way.
+
+## Read-only thermometer API for the Android frame
+
+Node-RED provides a dedicated JSON endpoint for the four household sensors and 24-hour
+history. SQLite is opened read-only; history uses five-minute averages, while minimum and
+maximum temperatures come from the original measurements. The latest MQTT payload supplies
+signal quality and the sensor timestamp, without changing measurement deduplication.
+A precise nginx route relays only this endpoint through the existing tunnel. The editor
+remains inaccessible through that vhost. Deployment uses the revision-aware Node-RED API
+with `nodes` mode, preserving the other flows and running containers.
+
+Cloudflare Access protects the exact JSON endpoint with a service-token policy for the
+existing frame Worker. The household dashboard login policy remains unchanged. The Worker
+validates the response, limits its size and refuses redirects. The four sensor cards and
+history were verified on the actual 1280 × 800 Android frame.
+
+The data path is Sonoff → Zigbee2MQTT → MQTT → Node-RED → SQLite. The frame calls only its
+Worker API; the Worker reaches the Pi through Access, Tunnel and the exact nginx route.
+It refreshes once per minute while visible, keeps the last response in the browser when
+offline and marks sensors silent after three hours without a measurement. No sensor readings
+or private screenshots are included in this public repository.
+Keep and thermometer code have separate owners: the frame project contains the frontend and
+Worker, this mirror contains Node-RED and nginx. The weekly encrypted backup still depends
+on the Mac; the running frame and Pi services do not. Functional Keep monitoring remains pending.

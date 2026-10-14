@@ -103,7 +103,7 @@
         "type": "function",
         "z": "f_thermo",
         "name": "stocke + route",
-        "func": "var p = msg.payload || {};\nif (msg.topic === 'zigbee2mqtt/Chambre') {\n    global.set('temp_chambre', p.temperature);\n    global.set('hum_chambre', p.humidity);\n}\n\n// Nom du capteur deduit du topic MQTT : l'arrivee d'un 2e capteur ne\n// demandera aucune modification ici.\nvar capteur = (msg.topic || '').split('/').pop() || 'inconnu';\n\n// Le wildcard 'zigbee2mqtt/+' capte aussi les topics techniques du bridge.\nif (capteur === 'bridge' || capteur === 'inconnu') return null;\nvar aTemp = typeof p.temperature === 'number';\nvar aLinky = capteur === 'Linky' && typeof p.apparent_power === 'number';\nvar tsLinky = aLinky ? (Date.parse(p.last_seen) || Date.now()) : null;\n\n// Un format par consommateur, pour qu'un changement d'un cote n'en casse pas un autre.\nreturn [\n    { payload: p, capteur: capteur },                                   // 1. carte (routee par capteur)\n    aTemp ? { payload: p.temperature } : null,                          // 2. seuil 30 C (nombre)\n    aTemp ? { payload: p, capteur: capteur } : null,                    // 3. SQLite\n    aTemp ? { payload: { ts: Date.parse(p.last_seen) || Date.now(),     // 4. graphe (point x/y/serie)\n                         temp: p.temperature, capteur: capteur } } : null,\n    aLinky ? { payload: p } : null,                                     // 5. SQLite Linky\n    aLinky ? { payload: { ts: tsLinky, papp: p.apparent_power } } : null // 6. graphe Linky 24h (point)\n];",
+        "func": "var p = msg.payload || {};\nif (msg.topic === 'zigbee2mqtt/Chambre') {\n    global.set('temp_chambre', p.temperature);\n    global.set('hum_chambre', p.humidity);\n}\n\n// Nom du capteur deduit du topic MQTT : l'arrivee d'un 2e capteur ne\n// demandera aucune modification ici.\nvar capteur = (msg.topic || '').split('/').pop() || 'inconnu';\n\n// Le wildcard 'zigbee2mqtt/+' capte aussi les topics techniques du bridge.\nif (capteur === 'bridge' || capteur === 'inconnu') return null;\nvar aTemp = typeof p.temperature === 'number';\nif (aTemp) {\n    var thermometers = global.get('frame_thermometers') || {};\n    thermometers[capteur] = p;\n    global.set('frame_thermometers', thermometers);\n}\nvar aLinky = capteur === 'Linky' && typeof p.apparent_power === 'number';\nvar tsLinky = aLinky ? (Date.parse(p.last_seen) || Date.now()) : null;\n\n// Un format par consommateur, pour qu'un changement d'un cote n'en casse pas un autre.\nreturn [\n    { payload: p, capteur: capteur },                                   // 1. carte (routee par capteur)\n    aTemp ? { payload: p.temperature } : null,                          // 2. seuil 30 C (nombre)\n    aTemp ? { payload: p, capteur: capteur } : null,                    // 3. SQLite\n    aTemp ? { payload: { ts: Date.parse(p.last_seen) || Date.now(),     // 4. graphe (point x/y/serie)\n                         temp: p.temperature, capteur: capteur } } : null,\n    aLinky ? { payload: p } : null,                                     // 5. SQLite Linky\n    aLinky ? { payload: { ts: tsLinky, papp: p.apparent_power } } : null // 6. graphe Linky 24h (point)\n];",
         "outputs": 6,
         "noerr": 0,
         "initialize": "",
@@ -1332,5 +1332,53 @@
                 "ui_card_linky"
             ]
         ]
+    },
+    {
+        "id": "frame_thermometers_in",
+        "type": "http in",
+        "z": "f_thermo",
+        "name": "GET thermomètres Classic10",
+        "url": "/thermo/frame",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 180,
+        "y": 1000,
+        "wires": [
+            [
+                "frame_thermometers_read"
+            ]
+        ]
+    },
+    {
+        "id": "frame_thermometers_read",
+        "type": "function",
+        "z": "f_thermo",
+        "name": "Classic10 : mesures et historique 24 h",
+        "func": "const { DatabaseSync } = global.get('sqlite');\nconst now = Date.now();\nconst recent = global.get('frame_thermometers') || {};\nlet db;\nmsg.headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };\ntry {\n    db = new DatabaseSync('/data/thermo.db', { readOnly: true });\n    const latest = db.prepare(`SELECT m.* FROM mesures m JOIN\n        (SELECT capteur, MAX(ts) AS ts FROM mesures GROUP BY capteur) l\n        ON m.capteur = l.capteur AND m.ts = l.ts`).all();\n    const history = db.prepare(`SELECT capteur, MAX(ts) AS ts, AVG(temp) AS temp\n        FROM mesures WHERE ts >= ? AND ts <= ? AND temp IS NOT NULL\n        GROUP BY capteur, CAST(ts / 300000 AS INTEGER) ORDER BY ts`).all(now - 86400000, now);\n    const bounds = db.prepare(`SELECT capteur, MIN(temp) AS min, MAX(temp) AS max\n        FROM mesures WHERE ts >= ? AND ts <= ? GROUP BY capteur`).all(now - 86400000, now);\n    const names = [...new Set(['Bureau', 'Chambre', 'Cuisine', 'Extérieur', ...latest.map(m => m.capteur)])];\n    msg.payload = { updated: new Date(now).toISOString(), sensors: names.map(name => {\n        const row = latest.find(m => m.capteur === name);\n        const live = recent[name];\n        const ts = live ? Date.parse(live.last_seen) : NaN;\n        const fresh = Number.isFinite(ts) && (!row || ts >= Number(row.ts));\n        const range = bounds.find(m => m.capteur === name);\n        return {\n            name, temp: fresh ? live.temperature : (row?.temp ?? null),\n            humidity: fresh ? (live.humidity ?? row?.hum ?? null) : (row?.hum ?? null),\n            battery: fresh ? (live.battery ?? row?.batterie ?? null) : (row?.batterie ?? null),\n            signal: live?.linkquality ?? null,\n            observed: fresh ? ts : (row ? Number(row.ts) : null),\n            min: range?.min ?? null, max: range?.max ?? null,\n            history: history.filter(m => m.capteur === name).map(m => ({ ts: Number(m.ts), temp: m.temp }))\n        };\n    }) };\n} catch (e) {\n    node.error('lecture thermomètres indisponible');\n    msg.statusCode = 503;\n    msg.payload = { error: 'Les thermomètres sont temporairement indisponibles.' };\n} finally { if (db) db.close(); }\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 490,
+        "y": 1000,
+        "wires": [
+            [
+                "frame_thermometers_reply"
+            ]
+        ]
+    },
+    {
+        "id": "frame_thermometers_reply",
+        "type": "http response",
+        "z": "f_thermo",
+        "name": "JSON Classic10",
+        "statusCode": "",
+        "headers": {},
+        "x": 770,
+        "y": 1000,
+        "wires": []
     }
 ]
