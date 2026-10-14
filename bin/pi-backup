@@ -130,7 +130,8 @@ if [ "$EMPREINTE" != "$(cat .secrets-empreinte 2>/dev/null)" ]; then
   tar czf - -C "$TMP" secrets | age -r "$CLE_PUB" > sauvegarde/secrets.age.tmp \
     || echec "chiffrement age échoué"
   [ -s sauvegarde/secrets.age.tmp ] || echec "secrets.age vide — rien n'a été écrasé"
-  mv sauvegarde/secrets.age.tmp sauvegarde/secrets.age
+  mv sauvegarde/secrets.age.tmp sauvegarde/secrets.age \
+    || echec "remplacement de secrets.age échoué — empreinte conservée"
   echo "$EMPREINTE" > .secrets-empreinte
   echo "  ✓ secrets rechiffrés ($(wc -c < sauvegarde/secrets.age | tr -d ' ') octets)"
 else

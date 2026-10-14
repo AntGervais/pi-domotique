@@ -219,7 +219,8 @@ Keep an old code copy for rollback. Do not restart Docker globally for a bridge 
 The Docker healthcheck tests the HTTP process, not Google authentication. Keep is not included
 in the existing ntfy healthcheck or transfer manifest. The private backup script now includes
 its configuration in the existing age-encrypted secrets archive and fails if that configuration
-is unavailable. Hidden files participate in change detection. An isolated decryption test
+is unavailable. If the encrypted archive cannot be replaced, the job fails without advancing
+its fingerprint or reporting success. Hidden files participate in change detection. An isolated decryption test
 confirmed an exact restoration with mode 600; production services were left running.
 The weekly backup runs from the Mac, while the dashboard itself operates independently.
 Rebuilding the image cannot recover its Google token: restore the encrypted configuration
