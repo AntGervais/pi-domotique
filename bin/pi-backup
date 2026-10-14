@@ -4,6 +4,7 @@
 # commite et pousse vers le depot prive GitHub.
 # Previent sur ntfy en cas d'echec, sinon une panne passerait inapercue.
 set -uo pipefail
+umask 077
 source "$(dirname "$0")/_manifest.sh"
 
 # Le canal ntfy n'est pas dans le depot : il vient du trousseau macOS.
@@ -22,6 +23,9 @@ echec() {
 cd "$PI_ROOT" || echec "miroir introuvable : $PI_ROOT"
 ssh -o BatchMode=yes -o ConnectTimeout=15 "$PI_HOST" true 2>/dev/null \
   || echec "Pi injoignable ($PI_HOST) — sauvegarde non effectuée."
+
+ssh "$PI_HOST" 'test -r /home/antoine/classic10-keep/.keep-config.json' \
+  || echec "configuration Keep inaccessible — sauvegarde incomplète, archive conservée"
 
 mkdir -p sauvegarde/secrets backups
 chmod 700 sauvegarde/secrets
@@ -104,10 +108,13 @@ for f in /home/antoine/zigbee/.env \
          /home/antoine/zigbee/nodered/data/flows_cred.json \
          /home/antoine/zigbee/nodered/data/.config.runtime.json \
          /home/antoine/zigbee/zigbee2mqtt/data/coordinator_backup.json \
-         /home/antoine/zigbee/zigbee2mqtt/data/configuration.yaml; do
+         /home/antoine/zigbee/zigbee2mqtt/data/configuration.yaml \
+         /home/antoine/classic10-keep/.keep-config.json; do
   if ssh "$PI_HOST" "test -r '$f'"; then
     ssh "$PI_HOST" "cat '$f'" > "$TMP/secrets/$(basename "$f")" || echec "lecture de $f échouée"
   else
+    [ "$f" != /home/antoine/classic10-keep/.keep-config.json ] \
+      || echec "configuration Keep inaccessible — archive conservée"
     echo "  · absent sur le Pi : $f"; manquants=$((manquants+1))
   fi
 done
@@ -115,7 +122,10 @@ done
 
 # On ne rechiffre que si le contenu a change : age produit un fichier different
 # a chaque appel (nonce aleatoire), ce qui creerait un commit inutile chaque semaine.
-EMPREINTE=$(cat "$TMP"/secrets/* 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+# Inclure les fichiers cachés et leurs noms, sans dépendre du dossier temporaire.
+EMPREINTE=$(find "$TMP/secrets" -type f -exec shasum -a 256 {} \; \
+  | sed "s|$TMP/secrets/||" | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1) \
+  || echec "calcul de l'empreinte des secrets échoué"
 if [ "$EMPREINTE" != "$(cat .secrets-empreinte 2>/dev/null)" ]; then
   tar czf - -C "$TMP" secrets | age -r "$CLE_PUB" > sauvegarde/secrets.age.tmp \
     || echec "chiffrement age échoué"

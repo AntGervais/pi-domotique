@@ -216,8 +216,13 @@ Updates rebuild this container only with `docker compose -f keep/raspberry-pi/co
 Keep an old code copy for rollback. Do not restart Docker globally for a bridge update.
 
 The Docker healthcheck tests the HTTP process, not Google authentication. Keep is not included
-in the existing ntfy healthcheck, transfer manifest or encrypted backup script. Rebuilding the
-image cannot recover its Google token; use a separate encrypted backup or reconnect Google.
+in the existing ntfy healthcheck or transfer manifest. The private backup script now includes
+its configuration in the existing age-encrypted secrets archive and fails if that configuration
+is unavailable. Hidden files participate in change detection. An isolated decryption test
+confirmed an exact restoration with mode 600; production services were left running.
+The weekly backup runs from the Mac, while the dashboard itself operates independently.
+Rebuilding the image cannot recover its Google token: restore the encrypted configuration
+or reconnect Google.
 The active local Tunnel configuration is covered by the transfer manifest; the Keep bridge is not.
 The container was healthy at the documentation check. Checking and unchecking from the deployed
 dashboard were confirmed by fresh Google synchronizations, then the original item state was
