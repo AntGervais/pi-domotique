@@ -3,8 +3,9 @@
 A 2016 Raspberry Pi 3B with **905 MB of usable RAM**, running DNS-level ad blocking, Zigbee
 thermometers, measurement history, a dashboard, alerts, voice endpoints and remote access.
 
-RAM is the constraint behind every decision below. With everything running, **~460 MB stay
-available**.
+RAM is the constraint behind every decision below. The original measurement left **~460 MB
+available**; it predates the Keep bridge added in October 2026. Its current RAM cost has not
+been measured here.
 
 ## Services
 
@@ -18,7 +19,8 @@ available**.
 | 🔐 **Tailscale** | systemd | Remote access with no inbound port opened | 66 MB |
 | 🐳 **Docker** | systemd | Container runtime (`dockerd` + `containerd`) | 114 MB |
 | 💾 **log2ram** | systemd | Keeps `/var/log` in RAM to spare the SD card | negligible |
-| | | **Total** | **467 MB** |
+| 📝 **Google Keep bridge** | separate Docker Compose | Checklists for an Android photo frame | not measured |
+| | | **Original total, before Keep** | **467 MB** |
 
 RAM is process RSS, summed per service. The column totals 467 MB while `free` reports
 441 MB actually in use: shared pages get counted twice, so read it as a ranking rather
@@ -179,6 +181,43 @@ bridge in one call.
 
 Detail that matters: don't start the Shortcut's name with "Temperature", or Siri answers
 with the weather forecast instead.
+
+## Google Keep bridge for an Android photo frame
+
+Added on 14 October 2026, separately from the Zigbee/Node-RED Compose stack. A Python bridge
+using the unofficial `gkeepapi` library lets the frame show a home checklist and pinned notes,
+and check or uncheck their items. The dashboard and bridge sources live in a separate private
+photo-frame project; this public repository does not contain them or the Google credentials.
+
+The container `photo-frame-keep` binds only to `127.0.0.1:8765` on the Pi, restarts with Docker,
+and runs as a non-root user with a read-only root filesystem and no added capabilities.
+Its private configuration is mounted read-only. The Google master token is not scoped to the
+notes exposed by the dashboard, so it needs the same protection as account credentials.
+
+An existing, remotely managed Cloudflare Tunnel gained one path-specific route:
+`^/api/keep(/.*)?$` → `http://127.0.0.1:8765`. It precedes the existing general host route,
+whose destination remains `http://127.0.0.1:8082`; the final catch-all still returns HTTP 404.
+The Worker authenticates to the bridge using a separate bearer token. No router port was opened,
+and the Node-RED, Zigbee2MQTT and Mosquitto services were left in place.
+
+Operate it from its own installation directory, never from the Zigbee Compose directory:
+
+```sh
+docker compose -f keep/raspberry-pi/compose.yaml ps
+curl --fail http://127.0.0.1:8765/health
+docker compose -f keep/raspberry-pi/compose.yaml restart keep-bridge
+```
+
+Updates rebuild this container only with `docker compose -f keep/raspberry-pi/compose.yaml up -d
+--build`, after replacing its code from the frame project and keeping the private configuration.
+Keep an old code copy for rollback. Do not restart Docker globally for a bridge update.
+
+The Docker healthcheck tests the HTTP process, not Google authentication. Keep is not included
+in the existing ntfy healthcheck, transfer manifest or encrypted backup script. Rebuilding the
+image cannot recover its Google token; use a separate encrypted backup or reconnect Google.
+Restoring the local mirror also does not restore the remotely managed Tunnel rules.
+The container was healthy at the documentation check; the frame's switch to its deployed Worker
+and end-to-end verification are still pending. Cloudflare hosting uses the free plans.
 
 ## 🌐 nginx
 
