@@ -194,10 +194,13 @@ and runs as a non-root user with a read-only root filesystem and no added capabi
 Its private configuration is mounted read-only. The Google master token is not scoped to the
 notes exposed by the dashboard, so it needs the same protection as account credentials.
 
-An existing, remotely managed Cloudflare Tunnel gained one path-specific route:
+The existing Cloudflare Tunnel connector uses its local configuration file. After validation
+and backup, that active file gained one path-specific route:
 `^/api/keep(/.*)?$` → `http://127.0.0.1:8765`. It precedes the existing general host route,
 whose destination remains `http://127.0.0.1:8082`; the final catch-all still returns HTTP 404.
-The Worker authenticates to the bridge using a separate bearer token. No router port was opened,
+The Worker authenticates with a dedicated Cloudflare Access service token scoped to the Keep
+path and its subpaths, plus the bridge bearer token. The existing dashboard Access policy is
+preserved. No router port was opened,
 and the Node-RED, Zigbee2MQTT and Mosquitto services were left in place.
 
 Operate it from its own installation directory, never from the Zigbee Compose directory:
@@ -215,9 +218,11 @@ Keep an old code copy for rollback. Do not restart Docker globally for a bridge 
 The Docker healthcheck tests the HTTP process, not Google authentication. Keep is not included
 in the existing ntfy healthcheck, transfer manifest or encrypted backup script. Rebuilding the
 image cannot recover its Google token; use a separate encrypted backup or reconnect Google.
-Restoring the local mirror also does not restore the remotely managed Tunnel rules.
-The container was healthy at the documentation check; the frame's switch to its deployed Worker
-and end-to-end verification are still pending. Cloudflare hosting uses the free plans.
+The active local Tunnel configuration is covered by the transfer manifest; the Keep bridge is not.
+The container was healthy at the documentation check. Checking and unchecking from the deployed
+dashboard were confirmed by fresh Google synchronizations, then the original item state was
+restored. The frame now opens the Worker after reboot, synchronizes its clock through Google
+Public NTP, and operates with the Mac development server stopped. Cloudflare uses the free plans.
 
 ## 🌐 nginx
 
